@@ -1,0 +1,5 @@
+/build/
+/build-scalar/
+*.neuroevo
+.DS_Store
+
