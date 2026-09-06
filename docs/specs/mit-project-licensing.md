@@ -61,7 +61,7 @@ ctest --test-dir build --output-on-failure
 - [x] Release build and tests pass
 - [x] Application contains and verifies `LICENSE.txt`
 - [x] DMG contains and verifies `LICENSE.txt`
-- [ ] GitHub reports SPDX identifier `MIT`
+- [x] GitHub reports SPDX identifier `MIT`
 
 ## Benchmark
 Not applicable; licensing and package metadata do not affect runtime behavior.
