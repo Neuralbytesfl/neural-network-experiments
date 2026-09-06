@@ -62,7 +62,6 @@ struct ContentView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Color(nsColor: .windowBackgroundColor))
         }
-        .task { await model.runControlLoop() }
     }
 
     private var sidebar: some View {

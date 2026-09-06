@@ -304,6 +304,8 @@ final class StudioModel: ObservableObject {
     @Published var controlDirectoryPath = ""
 
     private var worker: TrainingWorker?
+    var controlTask: Task<Void, Never>?
+    private var controlActivity: NSObjectProtocol?
 
     init() {
         let arguments = CommandLine.arguments
@@ -326,6 +328,11 @@ final class StudioModel: ObservableObject {
             loadPreview(from: dataPath)
         }
         prepareControlDirectory()
+        controlActivity = ProcessInfo.processInfo.beginActivity(
+            options: .userInitiatedAllowingIdleSystemSleep,
+            reason: "Neuroevo Studio live CLI control"
+        )
+        startControlLoop()
     }
 
     var backend: String {

@@ -32,10 +32,15 @@ extension StudioModel {
         }
     }
 
-    func runControlLoop() async {
-        while !Task.isCancelled {
-            processControlCommands()
-            try? await Task.sleep(for: .milliseconds(100))
+    func startControlLoop() {
+        guard controlTask == nil else { return }
+        // A detached poller is owned by the model rather than SwiftUI view
+        // identity, so sidebar navigation cannot cancel CLI control.
+        controlTask = Task.detached { [weak self] in
+            while !Task.isCancelled {
+                await self?.processControlCommands()
+                try? await Task.sleep(for: .milliseconds(100))
+            }
         }
     }
 

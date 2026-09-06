@@ -4,10 +4,13 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
+#include <exception>
 #include <fstream>
 #include <iomanip>
 #include <limits>
 #include <map>
+#include <mutex>
 #include <numeric>
 #include <sstream>
 #include <stdexcept>
@@ -116,8 +119,37 @@ void predictWithWorkspace(const std::vector<LayerGene>& layers,
 }
 
 #if defined(NEUROEVO_USE_ACCELERATE)
-Metric evaluateBatchAccelerated(const Genome& genome, const Partition& partition) {
-    const std::size_t rows = partition.samples.size();
+struct PackedPartition {
+    std::size_t rows = 0;
+    std::size_t inputs = 0;
+    std::size_t outputs = 0;
+    std::vector<float> features;
+    std::vector<float> targets;
+};
+
+PackedPartition packPartition(const Partition& partition,
+                              std::size_t inputs,
+                              std::size_t outputs) {
+    PackedPartition packed;
+    packed.rows = partition.samples.size();
+    packed.inputs = inputs;
+    packed.outputs = outputs;
+    packed.features.resize(packed.rows * inputs);
+    packed.targets.resize(packed.rows * outputs);
+    for (std::size_t row = 0; row < packed.rows; ++row) {
+        const auto& sample = partition.samples[row];
+        if (sample.features.size() != inputs) throw std::invalid_argument("input dimension mismatch");
+        if (sample.target.size() != outputs) throw std::invalid_argument("target dimension mismatch");
+        std::copy(sample.features.begin(), sample.features.end(),
+                  packed.features.begin() + static_cast<std::ptrdiff_t>(row * inputs));
+        std::copy(sample.target.begin(), sample.target.end(),
+                  packed.targets.begin() + static_cast<std::ptrdiff_t>(row * outputs));
+    }
+    return packed;
+}
+
+Metric evaluateBatchAccelerated(const Genome& genome, const PackedPartition& partition) {
+    const std::size_t rows = partition.rows;
     constexpr std::size_t kMaximumBatchElements = 1U << 20U;
     const std::size_t maximumWidth = maximumLayerWidth(genome.layers);
     const std::size_t batchRows = std::min(
@@ -131,13 +163,7 @@ Metric evaluateBatchAccelerated(const Genome& genome, const Partition& partition
     for (std::size_t offset = 0; offset < rows; offset += batchRows) {
         const std::size_t count = std::min(batchRows, rows - offset);
         const std::size_t inputs = genome.layers.front().inputs;
-        current.resize(count * inputs);
-        for (std::size_t row = 0; row < count; ++row) {
-            const auto& features = partition.samples[offset + row].features;
-            if (features.size() != inputs) throw std::invalid_argument("input dimension mismatch");
-            std::copy(features.begin(), features.end(),
-                      current.begin() + static_cast<std::ptrdiff_t>(row * inputs));
-        }
+        const float* layerInput = partition.features.data() + offset * inputs;
 
         for (std::size_t layerIndex = 0; layerIndex < genome.layers.size(); ++layerIndex) {
             const auto& layer = genome.layers[layerIndex];
@@ -149,24 +175,24 @@ Metric evaluateBatchAccelerated(const Genome& genome, const Partition& partition
             cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
                         static_cast<int>(count), static_cast<int>(layer.outputs),
                         static_cast<int>(layer.inputs), 1.0F,
-                        current.data(), static_cast<int>(layer.inputs),
+                        layerInput, static_cast<int>(layer.inputs),
                         layer.weights.data(), static_cast<int>(layer.inputs),
                         1.0F, output.data(), static_cast<int>(layer.outputs));
             if (layerIndex + 1 < genome.layers.size()) {
                 for (float& value : output) value = activate(value, layer.activation);
             }
             current.swap(output);
+            layerInput = current.data();
         }
 
         for (std::size_t row = 0; row < count; ++row) {
             float* prediction = current.data() + row * outputs;
-            const auto& target = partition.samples[offset + row].target;
-            if (target.size() != outputs) throw std::invalid_argument("target dimension mismatch");
+            const float* target = partition.targets.data() + (offset + row) * outputs;
             if (genome.task == TaskType::Classification) {
                 const std::size_t predicted = static_cast<std::size_t>(
                     std::max_element(prediction, prediction + outputs) - prediction);
                 const std::size_t expected = static_cast<std::size_t>(
-                    std::max_element(target.begin(), target.end()) - target.begin());
+                    std::max_element(target, target + outputs) - target);
                 if (predicted == expected) ++correct;
                 const float maximum = *std::max_element(prediction, prediction + outputs);
                 float sum = 0.0F;
@@ -196,6 +222,95 @@ Metric evaluateBatchAccelerated(const Genome& genome, const Partition& partition
     return metric;
 }
 #endif
+
+class GenerationWorkerPool {
+public:
+    explicit GenerationWorkerPool(std::size_t workerCount) : remaining_(0) {
+        workers_.reserve(workerCount);
+        for (std::size_t worker = 0; worker < workerCount; ++worker) {
+            workers_.emplace_back([this] { workerLoop(); });
+        }
+    }
+
+    ~GenerationWorkerPool() {
+        {
+            std::lock_guard lock(mutex_);
+            stopping_ = true;
+            ++epoch_;
+        }
+        workReady_.notify_all();
+        // Join while the mutex and condition variables are still alive. Since
+        // workers_ is declared before them, relying on implicit member
+        // destruction would otherwise destroy the synchronization state first.
+        workers_.clear();
+    }
+
+    GenerationWorkerPool(const GenerationWorkerPool&) = delete;
+    GenerationWorkerPool& operator=(const GenerationWorkerPool&) = delete;
+
+    void run(std::size_t itemCount, std::function<void(std::size_t)> task) {
+        {
+            std::lock_guard lock(mutex_);
+            task_ = std::move(task);
+            itemCount_ = itemCount;
+            cursor_.store(0, std::memory_order_relaxed);
+            remaining_ = workers_.size();
+            error_ = nullptr;
+            ++epoch_;
+        }
+        workReady_.notify_all();
+        std::unique_lock lock(mutex_);
+        completed_.wait(lock, [this] { return remaining_ == 0; });
+        task_ = {};
+        if (error_) std::rethrow_exception(error_);
+    }
+
+private:
+    void workerLoop() {
+        std::size_t observedEpoch = 0;
+        while (true) {
+            std::function<void(std::size_t)> task;
+            std::size_t itemCount = 0;
+            {
+                std::unique_lock lock(mutex_);
+                workReady_.wait(lock, [this, &observedEpoch] {
+                    return stopping_ || epoch_ != observedEpoch;
+                });
+                if (stopping_) return;
+                observedEpoch = epoch_;
+                task = task_;
+                itemCount = itemCount_;
+            }
+            while (true) {
+                const std::size_t index = cursor_.fetch_add(1, std::memory_order_relaxed);
+                if (index >= itemCount) break;
+                try {
+                    task(index);
+                } catch (...) {
+                    cursor_.store(itemCount, std::memory_order_relaxed);
+                    std::lock_guard lock(mutex_);
+                    if (!error_) error_ = std::current_exception();
+                }
+            }
+            {
+                std::lock_guard lock(mutex_);
+                if (--remaining_ == 0) completed_.notify_one();
+            }
+        }
+    }
+
+    std::vector<std::jthread> workers_;
+    std::atomic<std::size_t> cursor_{0};
+    std::mutex mutex_;
+    std::condition_variable workReady_;
+    std::condition_variable completed_;
+    std::function<void(std::size_t)> task_;
+    std::exception_ptr error_;
+    std::size_t itemCount_ = 0;
+    std::size_t remaining_;
+    std::size_t epoch_ = 0;
+    bool stopping_ = false;
+};
 
 bool sameShape(const Genome& a, const Genome& b) {
     if (a.layers.size() != b.layers.size()) return false;
@@ -512,7 +627,11 @@ Metric evaluate(const Genome& genome, const Partition& partition) {
     genome.validate();
 #if defined(NEUROEVO_USE_ACCELERATE)
     // Amortize BLAS dispatch and use cache-efficient matrix-matrix kernels for datasets.
-    if (partition.samples.size() >= 32) return evaluateBatchAccelerated(genome, partition);
+    if (partition.samples.size() >= 32) {
+        return evaluateBatchAccelerated(
+            genome, packPartition(partition, genome.layers.front().inputs,
+                                  genome.layers.back().outputs));
+    }
 #endif
     std::vector<float> prediction;
     std::vector<float> scratch;
@@ -650,32 +769,45 @@ EvolutionResult EvolutionEngine::run(const Dataset& dataset,
     bool hasWinner = false;
     double bestSeen = -std::numeric_limits<double>::infinity();
     std::size_t staleGenerations = 0;
+    const std::size_t workerCount = std::min(options_.threads, population.size());
+    GenerationWorkerPool workerPool(workerCount);
+#if defined(NEUROEVO_USE_ACCELERATE)
+    const bool usePackedTrain = dataset.train.samples.size() >= 32;
+    const bool usePackedValidation = dataset.validation.samples.size() >= 32;
+    PackedPartition packedTrain;
+    PackedPartition packedValidation;
+    if (usePackedTrain) {
+        packedTrain = packPartition(dataset.train, dataset.inputSize, dataset.outputSize);
+    }
+    if (usePackedValidation) {
+        packedValidation = packPartition(dataset.validation, dataset.inputSize, dataset.outputSize);
+    }
+#endif
 
     for (std::size_t generation = 0; generation < options_.generations; ++generation) {
-        std::atomic<std::size_t> cursor{0};
-        const std::size_t workerCount = std::min(options_.threads, population.size());
-        std::vector<std::jthread> workers;
-        workers.reserve(workerCount);
-        for (std::size_t worker = 0; worker < workerCount; ++worker) {
-            workers.emplace_back([&] {
-                while (true) {
-                    const std::size_t index = cursor.fetch_add(1);
-                    if (index >= population.size()) break;
-                    Genome& genome = population[index];
-                    const Metric training = evaluate(genome, dataset.train);
-                    const Metric validation = evaluate(genome, dataset.validation);
-                    genome.trainScore = training.score;
-                    genome.trainLoss = training.loss;
-                    genome.validationScore = validation.score;
-                    genome.validationLoss = validation.loss;
-                    const double lossGuidance = genome.task == TaskType::Classification
-                        ? 0.05 * training.loss : 0.0;
-                    genome.fitness = training.score - lossGuidance -
-                        options_.complexityPenalty * static_cast<double>(genome.parameterCount());
-                }
-            });
-        }
-        workers.clear(); // jthread destructors join
+        workerPool.run(population.size(), [&](std::size_t index) {
+            Genome& genome = population[index];
+#if defined(NEUROEVO_USE_ACCELERATE)
+            if (usePackedTrain || usePackedValidation) genome.validate();
+            const Metric training = usePackedTrain
+                ? evaluateBatchAccelerated(genome, packedTrain)
+                : evaluate(genome, dataset.train);
+            const Metric validation = usePackedValidation
+                ? evaluateBatchAccelerated(genome, packedValidation)
+                : evaluate(genome, dataset.validation);
+#else
+            const Metric training = evaluate(genome, dataset.train);
+            const Metric validation = evaluate(genome, dataset.validation);
+#endif
+            genome.trainScore = training.score;
+            genome.trainLoss = training.loss;
+            genome.validationScore = validation.score;
+            genome.validationLoss = validation.loss;
+            const double lossGuidance = genome.task == TaskType::Classification
+                ? 0.05 * training.loss : 0.0;
+            genome.fitness = training.score - lossGuidance -
+                options_.complexityPenalty * static_cast<double>(genome.parameterCount());
+        });
         result.evaluations += population.size();
         std::sort(population.begin(), population.end(),
                   [](const Genome& a, const Genome& b) { return a.fitness > b.fitness; });

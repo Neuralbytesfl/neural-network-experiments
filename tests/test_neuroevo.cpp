@@ -170,6 +170,28 @@ void testEvaluationConsistency() {
             "regression score is not negative loss");
 }
 
+void testWorkerPoolErrorPropagation() {
+    neuroevo::Dataset dataset;
+    dataset.task = neuroevo::TaskType::Regression;
+    dataset.inputSize = 2;
+    dataset.outputSize = 1;
+    dataset.train.samples.assign(16, neuroevo::Sample{{1.0F}, {0.0F}});
+    dataset.validation.samples.assign(16, neuroevo::Sample{{1.0F, 2.0F}, {0.0F}});
+    neuroevo::EvolutionOptions options;
+    options.populationSize = 8;
+    options.eliteCount = 2;
+    options.generations = 2;
+    options.threads = 4;
+    std::ostringstream progress;
+    bool threw = false;
+    try {
+        static_cast<void>(neuroevo::EvolutionEngine(options).run(dataset, progress));
+    } catch (const std::invalid_argument&) {
+        threw = true;
+    }
+    require(threw, "worker pool did not propagate an evaluation error");
+}
+
 struct BridgeContext {
     NESession* session = nullptr;
     std::size_t callbacks = 0;
@@ -356,6 +378,7 @@ int main() {
         testDatasetAndModelRoundTrip();
         testSmallEvolution();
         testEvaluationConsistency();
+        testWorkerPoolErrorPropagation();
         testCBridge();
         testDataGenerationAndCleaning();
         std::cout << "all tests passed\n";

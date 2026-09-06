@@ -3,8 +3,11 @@
 ## Goal
 Measure the largest supported dense-network workload on the Apple M5 Pro, identify the dominant CPU and allocation costs, and improve training/evaluation throughput without changing model semantics or deterministic results.
 
+Phase 2 extends this work by retaining evaluation workers across generations and
+prepacking partition features/targets once per run instead of once per candidate.
+
 ## Current State
-The engine evaluates candidates in parallel and uses a hybrid scalar/Apple Accelerate matrix-vector path. Each `evaluate` call currently constructs a `Network` by copying the genome layers, and each single-row prediction allocates and moves layer-output vectors. The existing benchmark covers a `32x64x64x4` inference network but not the maximum supported four hidden layers of width 128 or end-to-end population evaluation.
+Phase 1 removed genome copies and repeated layer-output allocation, added bounded Accelerate batch evaluation, and introduced a maximum-topology benchmark. Before phase 2, every generation still created and joined a new set of worker threads, and every candidate repacked the same partition rows into contiguous buffers.
 
 ## Desired State
 - A reproducible maximum-topology benchmark that can exercise both inference and candidate evaluation.
@@ -12,6 +15,8 @@ The engine evaluates candidates in parallel and uses a hybrid scalar/Apple Accel
 - Reduced avoidable copying and allocation in the dominant path.
 - Passing unit tests and numerically consistent benchmark checksums/scores.
 - Before/after measurements captured in `docs/benchmarks/`.
+- A bounded reusable worker pool with clean shutdown and exception propagation.
+- Contiguous partition caches shared read-only by candidate workers.
 
 ## Constraints
 - macOS 26.6.2 on Apple M5 Pro arm64.
@@ -32,6 +37,10 @@ The engine evaluates candidates in parallel and uses a hybrid scalar/Apple Accel
 4. Remove confirmed avoidable copies and per-sample/per-layer allocations while retaining the public `predict` interface.
 5. Rebuild, run tests, compare deterministic outputs, and repeat identical trials.
 6. Record results, caveats, and reusable optimization guidance.
+7. Capture an end-to-end evolutionary baseline for both tiny and complex datasets.
+8. Add a run-scoped worker pool so generation barriers do not recreate OS threads.
+9. Add run-scoped contiguous train/validation caches consumed by batched evaluation.
+10. Repeat correctness, sanitizer, native-app, and end-to-end performance checks.
 
 ## Files Changed
 - `docs/specs/neuroevo-performance-optimization.md`: working specification and reproducibility record.
@@ -39,12 +48,17 @@ The engine evaluates candidates in parallel and uses a hybrid scalar/Apple Accel
 - `.gitignore`: excludes the reproducible sanitizer build directory.
 - `tools/benchmark_training.cpp`: deterministic configurable evaluation workload.
 - `src/neuroevo.cpp`: borrowed genome evaluation, reusable workspaces, and bounded Accelerate batches.
-- `tests/test_neuroevo.cpp`: classification metric equivalence test.
-- `native/NeuroevoStudio/StudioControl.swift`: correct JSON numeric handling and complete metric/settings status.
+- `tests/test_neuroevo.cpp`: classification metric equivalence and worker-error propagation tests.
+- `native/NeuroevoStudio/StudioModel.swift`: owns the persistent live-control task and activity token.
+- `native/NeuroevoStudio/StudioControl.swift`: correct JSON numeric handling, complete status, and a model-owned control loop.
+- `native/NeuroevoStudio/ContentView.swift`: no longer owns CLI polling through view lifetime.
 - `scripts/test-live-control`: regression coverage for numeric edge settings and elapsed metrics.
 - `README.md`: documents the new benchmark.
 - `docs/benchmarks/m5-pro-maximum-training.md`: before/after results and profile evidence.
+- `docs/benchmarks/m5-pro-worker-pool-contiguous-data.md`: phase 2 paired end-to-end results.
 - `datasets/tasks/neuroevo-performance-optimization.md`: reusable task record.
+- `datasets/tasks/neuroevo-worker-pool-contiguous-data.md`: phase 2 task record.
+- `datasets/errors/neuroevo-worker-pool-shutdown-deadlock.md`: failure and correction found by stress testing.
 
 ## Commands Used
 Planned reproducible command families:
@@ -84,6 +98,12 @@ Captured three baseline trials and five final trials. Median 18-worker throughpu
 improved from 2,390,840 to 8,664,000 sample evaluations/s (3.62x). See
 `docs/benchmarks/m5-pro-maximum-training.md` for raw measurements and caveats.
 
+Phase 2 used interleaved runs against the published phase 1 commit. Persistent
+workers improved the tiny 1,000-generation workload from 427,605 to 551,825
+evaluations/s (1.29x), while the complex workload improved from 1,349 to 1,377
+evaluations/s (1.02x). A 100,000-row stress run peaked at 146,440,192 resident
+bytes. See `docs/benchmarks/m5-pro-worker-pool-contiguous-data.md`.
+
 ## Rollback
 Revert the performance commit or restore the touched files from Git history. The optimization must not require a data or saved-model migration.
 
@@ -91,3 +111,5 @@ Revert the performance commit or restore the touched files from Git history. The
 - Configurable benchmark workloads for future hardware comparisons.
 - Allocation-free evaluation workspace for other dense-network workloads.
 - Documented guidance for selecting scalar versus Accelerate execution thresholds.
+- Reusable fixed worker pool with barrier completion and exception propagation.
+- Immutable run-scoped packed partitions for many-candidate evaluation.
