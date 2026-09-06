@@ -155,7 +155,7 @@ int main(int argc, char** argv) {
         std::vector<double> checksums(options.population, 0.0);
         const std::size_t workers = std::min(options.threads, options.population);
         const auto parallelStart = std::chrono::steady_clock::now();
-        std::vector<std::jthread> threads;
+        std::vector<std::thread> threads;
         threads.reserve(workers);
         for (std::size_t worker = 0; worker < workers; ++worker) {
             threads.emplace_back([&] {
@@ -167,7 +167,9 @@ int main(int argc, char** argv) {
                 }
             });
         }
-        threads.clear();
+        for (auto& thread : threads) {
+            if (thread.joinable()) thread.join();
+        }
         const double parallelSeconds = secondsSince(parallelStart);
         double parallelChecksum = 0.0;
         for (double checksum : checksums) parallelChecksum += checksum;
