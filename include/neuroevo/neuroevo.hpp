@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <functional>
 #include <iosfwd>
+#include <limits>
 #include <random>
 #include <string>
 #include <vector>
@@ -92,6 +93,19 @@ struct Metric {
 };
 
 Metric evaluate(const Genome& genome, const Partition& partition);
+
+struct EvaluationReport {
+    Metric model;
+    Metric baseline;
+    double improvementOverBaseline = 0.0; // accuracy points or MSE reduction
+    double balancedAccuracy = std::numeric_limits<double>::quiet_NaN(); // classification only
+    double meanAbsoluteError = std::numeric_limits<double>::quiet_NaN(); // regression only
+    double rSquared = std::numeric_limits<double>::quiet_NaN();          // regression only
+};
+
+EvaluationReport evaluateAgainstBaseline(const Genome& genome,
+                                         const Partition& training,
+                                         const Partition& evaluation);
 
 struct EvolutionOptions {
     std::size_t populationSize = 160;

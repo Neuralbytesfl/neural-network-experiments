@@ -25,6 +25,7 @@ namespace neuroevo {
 namespace {
 
 constexpr float kEpsilon = 1e-7F;
+constexpr std::size_t kMaximumModelValues = 10'000'000;
 
 std::vector<float> parseNumericRow(const std::string& line, std::size_t lineNumber) {
     std::vector<float> values;
@@ -476,6 +477,9 @@ std::vector<T> readVector(std::istream& input, const std::string& name) {
     expectToken(input, name);
     std::size_t size = 0;
     if (!(input >> size)) throw std::runtime_error("model parse error reading " + name + " size");
+    if (size > kMaximumModelValues) {
+        throw std::runtime_error("model vector is larger than the safety limit: " + name);
+    }
     std::vector<T> result(size);
     for (T& value : result) {
         if (!(input >> value)) throw std::runtime_error("model parse error reading " + name);
@@ -568,7 +572,35 @@ Dataset Dataset::loadCsv(const std::filesystem::path& path,
     std::vector<std::size_t> order(rows.size());
     std::iota(order.begin(), order.end(), 0);
     std::mt19937_64 rng(seed);
-    std::shuffle(order.begin(), order.end(), rng);
+    if (taskValue == TaskType::Classification) {
+        std::vector<std::vector<std::size_t>> byClass(labels.size());
+        for (std::size_t index = 0; index < rows.size(); ++index) {
+            const auto found = std::lower_bound(labels.begin(), labels.end(), rows[index].back());
+            byClass[static_cast<std::size_t>(found - labels.begin())].push_back(index);
+        }
+        for (auto& indices : byClass) std::shuffle(indices.begin(), indices.end(), rng);
+        std::vector<std::size_t> used(byClass.size(), 0);
+        order.clear();
+        order.reserve(rows.size());
+        while (order.size() < rows.size()) {
+            std::size_t selected = byClass.size();
+            double greatestDeficit = -std::numeric_limits<double>::infinity();
+            const double prefix = static_cast<double>(order.size() + 1);
+            for (std::size_t classIndex = 0; classIndex < byClass.size(); ++classIndex) {
+                if (used[classIndex] == byClass[classIndex].size()) continue;
+                const double desired = prefix * static_cast<double>(byClass[classIndex].size()) /
+                                       static_cast<double>(rows.size());
+                const double deficit = desired - static_cast<double>(used[classIndex]);
+                if (deficit > greatestDeficit) {
+                    greatestDeficit = deficit;
+                    selected = classIndex;
+                }
+            }
+            order.push_back(byClass[selected][used[selected]++]);
+        }
+    } else {
+        std::shuffle(order.begin(), order.end(), rng);
+    }
     std::size_t trainCount = static_cast<std::size_t>(static_cast<double>(rows.size()) * trainRatio);
     std::size_t validationCount =
         static_cast<std::size_t>(static_cast<double>(rows.size()) * validationRatio);
@@ -667,8 +699,19 @@ void Genome::validate() const {
     for (std::size_t i = 0; i < layers.size(); ++i) {
         const auto& layer = layers[i];
         if (layer.inputs == 0 || layer.outputs == 0) throw std::runtime_error("zero-sized layer");
-        if (layer.weights.size() != layer.inputs * layer.outputs ||
+        if (layer.inputs > std::numeric_limits<std::size_t>::max() / layer.outputs ||
+            layer.weights.size() != layer.inputs * layer.outputs ||
             layer.biases.size() != layer.outputs) throw std::runtime_error("invalid layer parameter count");
+        if (layer.activation != Activation::Tanh && layer.activation != Activation::Relu &&
+            layer.activation != Activation::LeakyRelu) {
+            throw std::runtime_error("invalid layer activation");
+        }
+        if (std::any_of(layer.weights.begin(), layer.weights.end(),
+                        [](float value) { return !std::isfinite(value); }) ||
+            std::any_of(layer.biases.begin(), layer.biases.end(),
+                        [](float value) { return !std::isfinite(value); })) {
+            throw std::runtime_error("model contains non-finite parameters");
+        }
         if (i > 0 && layer.inputs != layers[i - 1].outputs) {
             throw std::runtime_error("disconnected layer dimensions");
         }
@@ -709,6 +752,12 @@ Metric evaluate(const Genome& genome, const Partition& partition) {
     std::size_t correct = 0;
     double totalLoss = 0.0;
     for (const auto& sample : partition.samples) {
+        if (sample.features.size() != genome.layers.front().inputs) {
+            throw std::invalid_argument("input dimension mismatch");
+        }
+        if (sample.target.size() != genome.layers.back().outputs) {
+            throw std::invalid_argument("target dimension mismatch");
+        }
         predictWithWorkspace(genome.layers, genome.task, sample.features, prediction, scratch);
         if (genome.task == TaskType::Classification) {
             const auto predicted = static_cast<std::size_t>(
@@ -733,6 +782,121 @@ Metric evaluate(const Genome& genome, const Partition& partition) {
         metric.score = -metric.loss;
     }
     return metric;
+}
+
+EvaluationReport evaluateAgainstBaseline(const Genome& genome,
+                                         const Partition& training,
+                                         const Partition& evaluation) {
+    if (training.samples.empty()) {
+        throw std::invalid_argument("cannot build a baseline from an empty training partition");
+    }
+    if (evaluation.samples.empty()) {
+        throw std::invalid_argument("cannot evaluate an empty partition");
+    }
+    genome.validate();
+    const std::size_t outputs = genome.layers.back().outputs;
+    EvaluationReport report;
+    report.model = evaluate(genome, evaluation);
+    const Network network(genome);
+
+    if (genome.task == TaskType::Classification) {
+        std::vector<std::size_t> trainingCounts(outputs, 0);
+        for (const auto& sample : training.samples) {
+            if (sample.target.size() != outputs) {
+                throw std::invalid_argument("target dimension mismatch");
+            }
+            const auto expected = static_cast<std::size_t>(
+                std::max_element(sample.target.begin(), sample.target.end()) - sample.target.begin());
+            ++trainingCounts[expected];
+        }
+        const auto majority = static_cast<std::size_t>(
+            std::max_element(trainingCounts.begin(), trainingCounts.end()) - trainingCounts.begin());
+        std::vector<std::size_t> actualCounts(outputs, 0);
+        std::vector<std::size_t> truePositive(outputs, 0);
+        std::size_t baselineCorrect = 0;
+        double baselineLoss = 0.0;
+        for (const auto& sample : evaluation.samples) {
+            if (sample.features.size() != genome.layers.front().inputs ||
+                sample.target.size() != outputs) {
+                throw std::invalid_argument("evaluation sample dimension mismatch");
+            }
+            const auto expected = static_cast<std::size_t>(
+                std::max_element(sample.target.begin(), sample.target.end()) - sample.target.begin());
+            const auto prediction = network.predict(sample.features);
+            const auto predicted = static_cast<std::size_t>(
+                std::max_element(prediction.begin(), prediction.end()) - prediction.begin());
+            ++actualCounts[expected];
+            if (predicted == expected) ++truePositive[expected];
+            if (expected == majority) ++baselineCorrect;
+            const double prior = static_cast<double>(trainingCounts[expected]) /
+                                 static_cast<double>(training.samples.size());
+            baselineLoss -= std::log(std::max(static_cast<double>(kEpsilon), prior));
+        }
+        const double rows = static_cast<double>(evaluation.samples.size());
+        report.baseline.score = static_cast<double>(baselineCorrect) / rows;
+        report.baseline.loss = baselineLoss / rows;
+        report.improvementOverBaseline = report.model.score - report.baseline.score;
+        double recallTotal = 0.0;
+        std::size_t representedClasses = 0;
+        for (std::size_t index = 0; index < outputs; ++index) {
+            if (actualCounts[index] == 0) continue;
+            recallTotal += static_cast<double>(truePositive[index]) /
+                           static_cast<double>(actualCounts[index]);
+            ++representedClasses;
+        }
+        report.balancedAccuracy = recallTotal / static_cast<double>(representedClasses);
+        return report;
+    }
+
+    std::vector<double> trainingMean(outputs, 0.0);
+    for (const auto& sample : training.samples) {
+        if (sample.target.size() != outputs) throw std::invalid_argument("target dimension mismatch");
+        for (std::size_t index = 0; index < outputs; ++index) {
+            trainingMean[index] += sample.target[index];
+        }
+    }
+    for (double& value : trainingMean) value /= static_cast<double>(training.samples.size());
+
+    std::vector<double> evaluationMean(outputs, 0.0);
+    for (const auto& sample : evaluation.samples) {
+        if (sample.features.size() != genome.layers.front().inputs ||
+            sample.target.size() != outputs) {
+            throw std::invalid_argument("evaluation sample dimension mismatch");
+        }
+        for (std::size_t index = 0; index < outputs; ++index) {
+            evaluationMean[index] += sample.target[index];
+        }
+    }
+    for (double& value : evaluationMean) value /= static_cast<double>(evaluation.samples.size());
+
+    double baselineSquaredError = 0.0;
+    double modelSquaredError = 0.0;
+    double modelAbsoluteError = 0.0;
+    double totalVariation = 0.0;
+    for (const auto& sample : evaluation.samples) {
+        const auto prediction = network.predict(sample.features);
+        for (std::size_t index = 0; index < outputs; ++index) {
+            const double target = sample.target[index];
+            const double baselineDifference = trainingMean[index] - target;
+            const double modelDifference = static_cast<double>(prediction[index]) - target;
+            const double variation = target - evaluationMean[index];
+            baselineSquaredError += baselineDifference * baselineDifference;
+            modelSquaredError += modelDifference * modelDifference;
+            modelAbsoluteError += std::abs(modelDifference);
+            totalVariation += variation * variation;
+        }
+    }
+    const double values = static_cast<double>(evaluation.samples.size() * outputs);
+    report.baseline.loss = baselineSquaredError / values;
+    report.baseline.score = -report.baseline.loss;
+    report.improvementOverBaseline = report.baseline.loss - report.model.loss;
+    report.meanAbsoluteError = modelAbsoluteError / values;
+    if (totalVariation <= static_cast<double>(kEpsilon)) {
+        report.rSquared = modelSquaredError <= static_cast<double>(kEpsilon) ? 1.0 : 0.0;
+    } else {
+        report.rSquared = 1.0 - modelSquaredError / totalVariation;
+    }
+    return report;
 }
 
 Genome makeRandomGenome(TaskType task,
@@ -811,6 +975,36 @@ EvolutionEngine::EvolutionEngine(EvolutionOptions options) : options_(std::move(
         throw std::invalid_argument("elite count must be positive and smaller than population");
     }
     if (options_.generations == 0) throw std::invalid_argument("generations must be positive");
+    if (options_.populationSize > 100'000 || options_.generations > 1'000'000) {
+        throw std::invalid_argument("population or generation count exceeds the safety limit");
+    }
+    if (options_.tournamentSize == 0) throw std::invalid_argument("tournament size must be positive");
+    const auto requireRate = [](double value, const char* name) {
+        if (!std::isfinite(value) || value < 0.0 || value > 1.0) {
+            throw std::invalid_argument(std::string(name) + " must be finite and between 0 and 1");
+        }
+    };
+    requireRate(options_.weightMutationRate, "weight mutation rate");
+    requireRate(options_.topologyMutationRate, "topology mutation rate");
+    requireRate(options_.activationMutationRate, "activation mutation rate");
+    requireRate(options_.immigrantRate, "immigrant rate");
+    if (!std::isfinite(options_.weightMutationSigma) || options_.weightMutationSigma < 0.0) {
+        throw std::invalid_argument("weight mutation sigma must be finite and non-negative");
+    }
+    if (!std::isfinite(options_.complexityPenalty) || options_.complexityPenalty < 0.0) {
+        throw std::invalid_argument("complexity penalty must be finite and non-negative");
+    }
+    if (!std::isfinite(options_.targetScore)) {
+        throw std::invalid_argument("target score must be finite");
+    }
+    if (options_.initialHidden == 0 || options_.maxHiddenLayers == 0 ||
+        options_.maxLayerWidth == 0 || options_.initialHidden > options_.maxLayerWidth) {
+        throw std::invalid_argument("hidden-layer limits are invalid");
+    }
+    if (options_.maxHiddenLayers > 64 || options_.maxLayerWidth > 4'096 ||
+        options_.threads > 1'024) {
+        throw std::invalid_argument("topology or worker count exceeds the safety limit");
+    }
     if (options_.threads == 0) options_.threads = std::max(1U, std::thread::hardware_concurrency());
 }
 
@@ -1002,6 +1196,9 @@ SavedModel SavedModel::load(const std::filesystem::path& path) {
     expectToken(input, "layers");
     std::size_t layerCount = 0;
     input >> layerCount;
+    if (layerCount == 0 || layerCount > 1'024) {
+        throw std::runtime_error("model layer count is invalid");
+    }
     for (std::size_t i = 0; i < layerCount; ++i) {
         expectToken(input, "layer");
         LayerGene layer;
@@ -1013,16 +1210,44 @@ SavedModel SavedModel::load(const std::filesystem::path& path) {
         model.genome.layers.push_back(std::move(layer));
     }
     expectToken(input, "end");
+    std::string trailing;
+    if (input >> trailing) throw std::runtime_error("model parse error: trailing content after end");
     model.genome.validate();
     if (model.featureMean.size() != model.genome.layers.front().inputs ||
         model.featureScale.size() != model.featureMean.size()) {
         throw std::runtime_error("model normalization dimensions are invalid");
+    }
+    const auto invalidNormalization = [](const std::vector<float>& values) {
+        return std::any_of(values.begin(), values.end(),
+                           [](float value) { return !std::isfinite(value); });
+    };
+    if (invalidNormalization(model.featureMean) || invalidNormalization(model.featureScale) ||
+        std::any_of(model.featureScale.begin(), model.featureScale.end(),
+                    [](float value) { return value == 0.0F; }) ||
+        invalidNormalization(model.targetMean) || invalidNormalization(model.targetScale) ||
+        std::any_of(model.targetScale.begin(), model.targetScale.end(),
+                    [](float value) { return value == 0.0F; }) ||
+        invalidNormalization(model.classValues)) {
+        throw std::runtime_error("model normalization contains invalid values");
+    }
+    if (model.genome.task == TaskType::Classification &&
+        model.classValues.size() != model.genome.layers.back().outputs) {
+        throw std::runtime_error("model class dimensions are invalid");
+    }
+    if (model.genome.task == TaskType::Regression &&
+        (model.targetMean.size() != model.genome.layers.back().outputs ||
+         model.targetScale.size() != model.genome.layers.back().outputs)) {
+        throw std::runtime_error("model target dimensions are invalid");
     }
     return model;
 }
 
 std::vector<float> SavedModel::predictRaw(std::vector<float> features) const {
     if (features.size() != featureMean.size()) throw std::invalid_argument("feature count mismatch");
+    if (std::any_of(features.begin(), features.end(),
+                    [](float value) { return !std::isfinite(value); })) {
+        throw std::invalid_argument("prediction features must be finite");
+    }
     for (std::size_t i = 0; i < features.size(); ++i) {
         features[i] = (features[i] - featureMean[i]) / featureScale[i];
     }

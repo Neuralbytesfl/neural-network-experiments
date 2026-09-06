@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <random>
 #include <sstream>
 #include <stdexcept>
@@ -15,6 +16,16 @@ namespace {
 
 void require(bool condition, const char* message) {
     if (!condition) throw std::runtime_error(message);
+}
+
+template <typename Function>
+void requireThrows(Function&& function, const char* message) {
+    try {
+        function();
+    } catch (const std::exception&) {
+        return;
+    }
+    throw std::runtime_error(message);
 }
 
 void testKnownNetwork() {
@@ -78,6 +89,26 @@ void testDatasetAndModelRoundTrip() {
     }
     std::filesystem::remove(base);
     std::filesystem::remove(modelPath);
+}
+
+void testStratifiedClassificationSplit() {
+    const auto path = std::filesystem::temp_directory_path() / "neuroevo_imbalanced.csv";
+    {
+        std::ofstream file(path);
+        for (int index = 0; index < 90; ++index) file << index << ",0\n";
+        for (int index = 0; index < 10; ++index) file << index << ",1\n";
+    }
+    const auto dataset = neuroevo::Dataset::loadCsv(
+        path, neuroevo::TaskType::Classification, 1, false, 1234);
+    const auto minorityCount = [](const neuroevo::Partition& partition) {
+        return std::count_if(partition.samples.begin(), partition.samples.end(),
+                             [](const neuroevo::Sample& sample) { return sample.target[1] == 1.0F; });
+    };
+    require(dataset.train.samples.size() == 70 && dataset.validation.samples.size() == 15 &&
+            dataset.test.samples.size() == 15, "stratification changed split sizes");
+    require(minorityCount(dataset.train) > 0 && minorityCount(dataset.validation) > 0 &&
+            minorityCount(dataset.test) > 0, "stratification omitted a sufficiently represented class");
+    std::filesystem::remove(path);
 }
 
 void testSmallEvolution() {
@@ -168,6 +199,139 @@ void testEvaluationConsistency() {
             "batched evaluation changed regression loss");
     require(std::abs(regressionActual.score + regressionActual.loss) < 1e-12,
             "regression score is not negative loss");
+}
+
+void testTrustMetrics() {
+    neuroevo::Genome classifier;
+    classifier.task = neuroevo::TaskType::Classification;
+    classifier.layers.push_back({1, 2, neuroevo::Activation::Tanh,
+                                 {-4.0F, 4.0F}, {0.0F, 0.0F}});
+    neuroevo::Partition classificationTrain;
+    classificationTrain.samples = {
+        {{-1.0F}, {1.0F, 0.0F}}, {{-0.5F}, {1.0F, 0.0F}},
+        {{-0.2F}, {1.0F, 0.0F}}, {{1.0F}, {0.0F, 1.0F}}
+    };
+    neuroevo::Partition classificationTest;
+    classificationTest.samples = {
+        {{-0.8F}, {1.0F, 0.0F}}, {{-0.3F}, {1.0F, 0.0F}},
+        {{0.3F}, {0.0F, 1.0F}}, {{0.8F}, {0.0F, 1.0F}}
+    };
+    const auto classification = neuroevo::evaluateAgainstBaseline(
+        classifier, classificationTrain, classificationTest);
+    require(std::abs(classification.model.score - 1.0) < 1e-12,
+            "classification trust report model accuracy is wrong");
+    require(std::abs(classification.baseline.score - 0.5) < 1e-12,
+            "classification majority baseline is wrong");
+    require(std::abs(classification.balancedAccuracy - 1.0) < 1e-12,
+            "classification balanced accuracy is wrong");
+    require(std::abs(classification.improvementOverBaseline - 0.5) < 1e-12,
+            "classification baseline improvement is wrong");
+
+    neuroevo::Genome regressor;
+    regressor.task = neuroevo::TaskType::Regression;
+    regressor.layers.push_back({1, 1, neuroevo::Activation::Tanh, {1.0F}, {0.0F}});
+    neuroevo::Partition regressionTrain;
+    regressionTrain.samples = {{{-1.0F}, {-1.0F}}, {{1.0F}, {1.0F}}};
+    neuroevo::Partition regressionTest;
+    regressionTest.samples = {{{-2.0F}, {-2.0F}}, {{2.0F}, {2.0F}}};
+    const auto regression = neuroevo::evaluateAgainstBaseline(
+        regressor, regressionTrain, regressionTest);
+    require(regression.model.loss < 1e-12, "regression model MSE is wrong");
+    require(std::abs(regression.baseline.loss - 4.0) < 1e-12,
+            "regression mean baseline is wrong");
+    require(regression.meanAbsoluteError < 1e-12, "regression MAE is wrong");
+    require(std::abs(regression.rSquared - 1.0) < 1e-12, "regression R-squared is wrong");
+    require(std::abs(regression.improvementOverBaseline - 4.0) < 1e-12,
+            "regression baseline improvement is wrong");
+
+    neuroevo::Genome constantRegressor;
+    constantRegressor.task = neuroevo::TaskType::Regression;
+    constantRegressor.layers.push_back({1, 1, neuroevo::Activation::Tanh, {0.0F}, {1.0F}});
+    neuroevo::Partition constant = {{{{0.0F}, {1.0F}}, {{1.0F}, {1.0F}}}};
+    const auto constantReport = neuroevo::evaluateAgainstBaseline(
+        constantRegressor, constant, constant);
+    require(std::isfinite(constantReport.rSquared) && constantReport.rSquared == 1.0,
+            "constant-target R-squared must be finite and documented");
+}
+
+void testValidationEdgeCases() {
+    neuroevo::EvolutionOptions options;
+    options.tournamentSize = 0;
+    requireThrows([&] { neuroevo::EvolutionEngine engine(options); },
+                  "zero tournament size was accepted");
+    options = {};
+    options.weightMutationRate = std::numeric_limits<double>::quiet_NaN();
+    requireThrows([&] { neuroevo::EvolutionEngine engine(options); },
+                  "non-finite mutation rate was accepted");
+    options = {};
+    options.immigrantRate = 1.1;
+    requireThrows([&] { neuroevo::EvolutionEngine engine(options); },
+                  "out-of-range immigrant rate was accepted");
+    options = {};
+    options.initialHidden = options.maxLayerWidth + 1;
+    requireThrows([&] { neuroevo::EvolutionEngine engine(options); },
+                  "impossible hidden width was accepted");
+
+    neuroevo::Genome invalid;
+    invalid.task = neuroevo::TaskType::Regression;
+    invalid.layers.push_back({1, 1, neuroevo::Activation::Tanh,
+                              {std::numeric_limits<float>::infinity()}, {0.0F}});
+    requireThrows([&] { invalid.validate(); }, "non-finite model parameter was accepted");
+
+    neuroevo::Genome valid;
+    valid.task = neuroevo::TaskType::Regression;
+    valid.layers.push_back({1, 1, neuroevo::Activation::Tanh, {1.0F}, {0.0F}});
+    const neuroevo::SavedModel saved{valid, {0.0F}, {1.0F}, {0.0F}, {1.0F}, {}};
+    requireThrows([&] {
+        static_cast<void>(saved.predictRaw({std::numeric_limits<float>::quiet_NaN()}));
+    }, "non-finite prediction input was accepted");
+
+    const auto invalidModelPath = std::filesystem::temp_directory_path() /
+                                  "neuroevo_invalid_model.txt";
+    {
+        std::ofstream file(invalidModelPath);
+        file << "NEUROEVO_MODEL 2\n"
+             << "task regression\n"
+             << "means 1 0\n"
+             << "scales 1 0\n"
+             << "target_means 1 0\n"
+             << "target_scales 1 1\n"
+             << "classes 0\n"
+             << "layers 1\n"
+             << "layer 1 1 tanh\n"
+             << "weights 1 1\n"
+             << "biases 1 0\n"
+             << "end\n";
+    }
+    requireThrows([&] { static_cast<void>(neuroevo::SavedModel::load(invalidModelPath)); },
+                  "zero normalization scale was accepted");
+    {
+        std::ofstream file(invalidModelPath);
+        file << "NEUROEVO_MODEL 2\n"
+             << "task regression\n"
+             << "means 10000001\n";
+    }
+    requireThrows([&] { static_cast<void>(neuroevo::SavedModel::load(invalidModelPath)); },
+                  "oversized model vector was accepted");
+    {
+        saved.save(invalidModelPath);
+        std::ofstream file(invalidModelPath, std::ios::app);
+        file << "unexpected\n";
+    }
+    requireThrows([&] { static_cast<void>(neuroevo::SavedModel::load(invalidModelPath)); },
+                  "trailing model content was accepted");
+    std::filesystem::remove(invalidModelPath);
+
+    NEConfig invalidTask{};
+    ne_default_config(&invalidTask);
+    const std::string dataPath = (std::filesystem::temp_directory_path() /
+                                  "neuroevo_missing.csv").string();
+    invalidTask.data_path = dataPath.c_str();
+    invalidTask.task = 99;
+    NEDatasetInfo info{};
+    char error[128]{};
+    require(ne_inspect_dataset(&invalidTask, &info, error, sizeof(error)) != 0,
+            "invalid C task enum was accepted");
 }
 
 void testWorkerPoolErrorPropagation() {
@@ -285,6 +449,10 @@ void testCBridge() {
                                 &training, error, sizeof(error));
     require(status == 0, "bridge training failed");
     require(training.cancelled == 1 && context.callbacks >= 3, "bridge cancellation failed");
+    require(std::isfinite(training.baseline_score) &&
+            std::isfinite(training.improvement_over_baseline) &&
+            std::isfinite(training.balanced_accuracy),
+            "bridge trust report is invalid");
     ne_session_destroy(context.session);
 
     const float features[] = {0.0F, 1.0F};
@@ -417,8 +585,11 @@ int main() {
         testKnownNetwork();
         testMutationValidity();
         testDatasetAndModelRoundTrip();
+        testStratifiedClassificationSplit();
         testSmallEvolution();
         testEvaluationConsistency();
+        testTrustMetrics();
+        testValidationEdgeCases();
         testWorkerPoolErrorPropagation();
         testTopologySchedulingDeterminism();
         testCBridge();

@@ -107,6 +107,12 @@ struct TrainingSummary: Sendable {
     let validation: Double
     let test: Double
     let testLoss: Double
+    let baselineScore: Double
+    let baselineLoss: Double
+    let improvementOverBaseline: Double
+    let balancedAccuracy: Double
+    let meanAbsoluteError: Double
+    let rSquared: Double
     let parameters: Int
     let evaluations: Int
     let elapsed: Double
@@ -203,6 +209,12 @@ private final class TrainingWorker: @unchecked Sendable {
             validation: result.validation_score,
             test: result.test_score,
             testLoss: result.test_loss,
+            baselineScore: result.baseline_score,
+            baselineLoss: result.baseline_loss,
+            improvementOverBaseline: result.improvement_over_baseline,
+            balancedAccuracy: result.balanced_accuracy,
+            meanAbsoluteError: result.mean_absolute_error,
+            rSquared: result.r_squared,
             parameters: Int(result.parameter_count),
             evaluations: Int(result.evaluations),
             elapsed: result.elapsed_seconds,
@@ -216,7 +228,7 @@ private final class TrainingWorker: @unchecked Sendable {
         ne_default_config(&config)
         config.data_path = data
         config.output_path = output
-        config.task = settings.isRegression ? NE_TASK_REGRESSION : NE_TASK_CLASSIFICATION
+        config.task = Int32((settings.isRegression ? NE_TASK_REGRESSION : NE_TASK_CLASSIFICATION).rawValue)
         config.target_columns = settings.targetColumns
         config.has_header = settings.hasHeader ? 1 : 0
         config.population_size = settings.population
@@ -289,6 +301,13 @@ final class StudioModel: ObservableObject {
     @Published private(set) var trainScore = 0.0
     @Published private(set) var validationScore = 0.0
     @Published private(set) var testScore: Double?
+    @Published private(set) var testLoss: Double?
+    @Published private(set) var baselineScore: Double?
+    @Published private(set) var baselineLoss: Double?
+    @Published private(set) var improvementOverBaseline: Double?
+    @Published private(set) var balancedAccuracy: Double?
+    @Published private(set) var meanAbsoluteError: Double?
+    @Published private(set) var rSquared: Double?
     @Published private(set) var meanFitness = 0.0
     @Published private(set) var parameterCount = 0
     @Published private(set) var evaluations = 0
@@ -495,7 +514,7 @@ final class StudioModel: ObservableObject {
             var config = NEConfig()
             ne_default_config(&config)
             config.data_path = data
-            config.task = isRegression ? NE_TASK_REGRESSION : NE_TASK_CLASSIFICATION
+            config.task = Int32((isRegression ? NE_TASK_REGRESSION : NE_TASK_CLASSIFICATION).rawValue)
             config.target_columns = targetColumns
             config.has_header = hasHeader ? 1 : 0
             config.seed = seed
@@ -521,6 +540,13 @@ final class StudioModel: ObservableObject {
         }
         points.removeAll()
         testScore = nil
+        testLoss = nil
+        baselineScore = nil
+        baselineLoss = nil
+        improvementOverBaseline = nil
+        balancedAccuracy = nil
+        meanAbsoluteError = nil
+        rSquared = nil
         progress = 0
         isTraining = true
         status = "Evolution running"
@@ -660,13 +686,26 @@ final class StudioModel: ObservableObject {
         case .success(let summary):
             validationScore = summary.validation
             testScore = summary.test
+            testLoss = summary.testLoss
+            baselineScore = summary.baselineScore
+            baselineLoss = summary.baselineLoss
+            improvementOverBaseline = summary.improvementOverBaseline
+            balancedAccuracy = summary.balancedAccuracy
+            meanAbsoluteError = summary.meanAbsoluteError
+            rSquared = summary.rSquared
             parameterCount = summary.parameters
             evaluations = summary.evaluations
             elapsed = summary.elapsed
             topology = summary.topology
             modelPath = outputPath
-            status = summary.cancelled ? "Stopped safely; best-so-far model saved" : "Training complete"
-            appendLog("\(status). Test \(format(summary.test)), loss \(format(summary.testLoss))")
+            if summary.cancelled {
+                status = "Stopped safely; best-so-far model saved"
+            } else if summary.improvementOverBaseline <= 0 {
+                status = "Training complete, but the winner did not beat the naive baseline"
+            } else {
+                status = "Training complete · winner beat the naive baseline"
+            }
+            appendLog("\(status). Test \(format(summary.test)), baseline \(format(summary.baselineScore)), improvement \(format(summary.improvementOverBaseline))")
         }
     }
 

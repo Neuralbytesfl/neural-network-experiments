@@ -225,7 +225,14 @@ extension StudioModel {
             "elapsed": elapsed,
             "trainScore": trainScore,
             "validationScore": validationScore,
-            "testScore": testScore ?? NSNull(),
+            "testScore": jsonMetric(testScore),
+            "testLoss": jsonMetric(testLoss),
+            "baselineScore": jsonMetric(baselineScore),
+            "baselineLoss": jsonMetric(baselineLoss),
+            "improvementOverBaseline": jsonMetric(improvementOverBaseline),
+            "balancedAccuracy": jsonMetric(balancedAccuracy),
+            "meanAbsoluteError": jsonMetric(meanAbsoluteError),
+            "rSquared": jsonMetric(rSquared),
             "parameters": parameterCount,
             "evaluations": evaluations,
             "topology": topology,
@@ -246,6 +253,11 @@ extension StudioModel {
                                 "score": profile.qualityScore]
         }
         return state
+    }
+
+    private func jsonMetric(_ value: Double?) -> Any {
+        guard let value, value.isFinite else { return NSNull() }
+        return value
     }
 
     private func pattern(named name: String) -> SyntheticPattern? {

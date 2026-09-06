@@ -4,6 +4,8 @@
 
 A dependency-light C++20 neuroevolution engine for numeric supervised-learning data. It evolves dense-network weights, biases, hidden-layer widths/depth, and activation functions, selects against a validation partition, and evaluates the winner once against a held-out test partition.
 
+Every completed run includes a trust report. Classification compares the winner with always choosing the most common training class and reports balanced accuracy. Regression compares it with always predicting the training target mean and reports normalized-target MSE/MAE plus scale-independent R-squared. The app explicitly warns when evolution did not beat the naive baseline.
+
 This program can search for a model that generalizes from examples. It cannot guarantee an accurate solution to every problem: the data must contain a learnable relationship, the train/validation/test distributions must be representative, and the search budget and supported network family must be suitable.
 
 ## Build
@@ -97,6 +99,7 @@ Neuroevo Studio is a native SwiftUI and Swift Charts application backed by the s
 - Dataset split and shape summary
 - Current winning topology
 - Generation, validation, test, parameter, evaluation, and elapsed-time metrics
+- A task-aware trust report with a deterministic naive baseline and honest pass/fail interpretation
 - Cooperative stop that saves the best model found so far
 - Run logs and raw-row prediction
 - Core ML export and CPU-plus-Neural-Engine-allowed inference
@@ -190,6 +193,14 @@ hidden layers and measures both sequential and parallel partition evaluation. Se
 - No gradient fine-tuning after evolution
 - No NEAT speciation or innovation-number crossover
 - Core ML export currently uses the maintained-but-feature-frozen neural-network model representation; ML Program export is a future extension
+- Classification splitting is deterministic and proportional; extremely rare-class warnings and chronological time-series splitting remain production requirements
+- Standalone cleaning is educational and auditable, but learned imputation/clipping must move into a train-fitted pipeline to eliminate production leakage risk
+- Experiment bundles/model cards, quoted-field CSV, Swift UI tests, accessibility automation, and notarization remain release-gate work
+
+The versioned quality plan and edge-case release contract live in
+`docs/specs/neuroevo-studio-productization.md` and
+`docs/testing/quality-matrix.md`. GitHub Actions exercises portable C++20,
+sanitizers, Apple Accelerate, and the native Swift build.
 
 The `Dataset`, `Genome`, `Network`, evaluator, and evolution engine are separate so these can be extended without rewriting the CLI.
 

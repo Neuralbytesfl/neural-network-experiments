@@ -48,10 +48,12 @@ void validateConfig(const NEConfig* config) {
     }
 }
 
-neuroevo::TaskType taskFrom(const NETask task) {
-    return task == NE_TASK_REGRESSION
-        ? neuroevo::TaskType::Regression
-        : neuroevo::TaskType::Classification;
+neuroevo::TaskType taskFrom(const int task) {
+    switch (task) {
+        case NE_TASK_CLASSIFICATION: return neuroevo::TaskType::Classification;
+        case NE_TASK_REGRESSION: return neuroevo::TaskType::Regression;
+    }
+    throw std::invalid_argument("unknown task type");
 }
 
 neuroevo::DataPattern patternFrom(const NEDataPattern pattern) {
@@ -214,14 +216,21 @@ int ne_train(NESession* session,
                 return !session->cancelled.load(std::memory_order_relaxed);
             });
 
-        const auto test = neuroevo::evaluate(evolution.winner, dataset.test);
+        const auto evaluation = neuroevo::evaluateAgainstBaseline(
+            evolution.winner, dataset.train, dataset.test);
         neuroevo::SavedModel{evolution.winner, dataset.featureMean, dataset.featureScale,
                              dataset.targetMean, dataset.targetScale,
                              dataset.classValues}.save(config->output_path);
         result->cancelled = session->cancelled.load(std::memory_order_relaxed) ? 1 : 0;
         result->validation_score = evolution.winner.validationScore;
-        result->test_score = test.score;
-        result->test_loss = test.loss;
+        result->test_score = evaluation.model.score;
+        result->test_loss = evaluation.model.loss;
+        result->baseline_score = evaluation.baseline.score;
+        result->baseline_loss = evaluation.baseline.loss;
+        result->improvement_over_baseline = evaluation.improvementOverBaseline;
+        result->balanced_accuracy = evaluation.balancedAccuracy;
+        result->mean_absolute_error = evaluation.meanAbsoluteError;
+        result->r_squared = evaluation.rSquared;
         result->parameter_count = evolution.winner.parameterCount();
         result->evaluations = evolution.evaluations;
         result->elapsed_seconds = evolution.elapsedSeconds;

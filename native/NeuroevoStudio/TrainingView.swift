@@ -15,6 +15,7 @@ struct TrainingView: View {
                     controls.frame(width: 340)
                     VStack(spacing: 16) {
                         metricGrid
+                        trustPanel
                         scoreChart
                         HStack(alignment: .top, spacing: 16) {
                             topologyPanel
@@ -75,8 +76,8 @@ struct TrainingView: View {
     private var metricGrid: some View {
         HStack(spacing: 12) {
             MetricCard(title: "Generation", value: model.generation.formatted(), symbol: "arrow.triangle.2.circlepath")
-            MetricCard(title: "Validation", value: score(model.validationScore), symbol: "checkmark.seal")
-            MetricCard(title: "Test", value: model.testScore.map(score) ?? "—", symbol: "lock.shield", color: .cyan)
+            MetricCard(title: model.isRegression ? "Validation −MSE" : "Validation accuracy", value: score(model.validationScore), symbol: "checkmark.seal")
+            MetricCard(title: model.isRegression ? "Test MSE" : "Test accuracy", value: model.isRegression ? model.testLoss.map(score) ?? "—" : model.testScore.map(score) ?? "—", symbol: "lock.shield", color: .cyan)
             MetricCard(title: "Parameters", value: model.parameterCount.formatted(), symbol: "point.3.filled.connected.trianglepath.dotted")
         }
     }
@@ -93,9 +94,46 @@ struct TrainingView: View {
                         .foregroundStyle(.indigo).interpolationMethod(.catmullRom)
                     LineMark(x: .value("Generation", point.generation), y: .value("Score", point.validation), series: .value("Series", "Validation"))
                         .foregroundStyle(.mint).interpolationMethod(.catmullRom)
-                }.chartYScale(domain: 0...1).frame(minHeight: 270)
+                }.frame(minHeight: 270)
             }
         }
+    }
+
+    private var trustPanel: some View {
+        StudioPanel("Trust report", subtitle: "The evolved winner must outperform a simple answer before complexity is justified") {
+            if let improvement = model.improvementOverBaseline {
+                HStack(spacing: 24) {
+                    if model.isRegression {
+                        trustMetric("Naive MSE (scaled)", model.baselineLoss)
+                        trustMetric("Winner MAE (scaled)", model.meanAbsoluteError)
+                        trustMetric("R²", model.rSquared)
+                        trustMetric("MSE reduction", improvement)
+                    } else {
+                        trustMetric("Majority baseline", model.baselineScore)
+                        trustMetric("Balanced accuracy", model.balancedAccuracy)
+                        trustMetric("Accuracy gain", improvement)
+                    }
+                }
+                Label(improvement > 0 ? "Winner beats the baseline" : "Winner does not beat the baseline yet",
+                      systemImage: improvement > 0 ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
+                    .foregroundStyle(improvement > 0 ? .mint : .orange)
+                    .font(.callout.bold())
+                Text(model.isRegression
+                     ? "The baseline always predicts the training-set target mean. MSE and MAE use the normalized target scale; R² is scale-independent. Positive MSE reduction means evolution added predictive value."
+                     : "The baseline always predicts the most common training class. Balanced accuracy gives each represented test class equal weight.")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else {
+                Text("Complete a run to compare its held-out result with a deterministic naive baseline.")
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func trustMetric(_ title: String, _ value: Double?) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title).font(.caption).foregroundStyle(.secondary)
+            Text(value.map(score) ?? "—").font(.title3.monospacedDigit().bold())
+        }.frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var topologyPanel: some View {

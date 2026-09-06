@@ -18,7 +18,7 @@ typedef enum NETask {
 typedef struct NEConfig {
     const char* data_path;
     const char* output_path;
-    NETask task;
+    int task;
     size_t target_columns;
     int has_header;
     size_t population_size;
@@ -68,6 +68,12 @@ typedef struct NETrainResult {
     double validation_score;
     double test_score;
     double test_loss;
+    double baseline_score;
+    double baseline_loss;
+    double improvement_over_baseline;
+    double balanced_accuracy;
+    double mean_absolute_error;
+    double r_squared;
     size_t parameter_count;
     size_t evaluations;
     double elapsed_seconds;

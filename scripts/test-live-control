@@ -18,10 +18,14 @@ while (( $# > 0 )); do
 done
 data_path="$project_dir/build/cli-live-spiral.csv"
 model_path="$project_dir/build/cli-live-spiral.neuroevo"
+regression_data_path="$project_dir/build/cli-live-sine.csv"
+regression_model_path="$project_dir/build/cli-live-sine.neuroevo"
 if (( dry_run )); then
   print "data=$data_path"
   print "model=$model_path"
-  print 'planned=navigate, set, generate, profile, train, wait, predict, open Learn'
+  print "regression_data=$regression_data_path"
+  print "regression_model=$regression_model_path"
+  print 'planned=navigate, set, generate, profile, train, wait, predict, verify classification and regression trust reports, open Learn'
   exit 0
 fi
 ctl="$script_dir/studioctl"
@@ -35,10 +39,20 @@ ctl="$script_dir/studioctl"
 "$ctl" --compact train --data "$data_path" --output "$model_path" --task classification --population 48 --generations 30 >/dev/null
 "$ctl" --compact wait --training-timeout 60 >/dev/null
 "$ctl" --compact predict "0.2,-0.1" --model "$model_path" >/dev/null
+classification_status_json=$("$ctl" --compact status)
+python3 -c 'import json,math,sys; state=json.load(sys.stdin)["state"]; assert state["predictionOutput"] != "—"; assert all(math.isfinite(state[key]) for key in ("testScore", "baselineScore", "improvementOverBaseline", "balancedAccuracy")); assert state["meanAbsoluteError"] is None; assert state["rSquared"] is None' <<< "$classification_status_json"
+
+"$ctl" --compact page create >/dev/null
+"$ctl" --compact generate --pattern sine --rows 240 --noise 0.02 --seed 778 --output "$regression_data_path" >/dev/null
+"$ctl" --compact train --data "$regression_data_path" --output "$regression_model_path" --task regression --population 48 --generations 30 >/dev/null
+"$ctl" --compact wait --training-timeout 60 >/dev/null
+"$ctl" --compact predict "0.2,-0.1" --model "$regression_model_path" >/dev/null
 "$ctl" --compact page learn >/dev/null
 [[ -s "$data_path" ]] || { print -u2 'error: generated CSV is missing'; exit 1; }
 [[ -s "$model_path" ]] || { print -u2 'error: trained model is missing'; exit 1; }
+[[ -s "$regression_data_path" ]] || { print -u2 'error: generated regression CSV is missing'; exit 1; }
+[[ -s "$regression_model_path" ]] || { print -u2 'error: trained regression model is missing'; exit 1; }
 status_json=$("$ctl" --compact status)
-python3 -c 'import json,sys; state=json.load(sys.stdin)["state"]; assert state["page"] == "Learn"; assert state["predictionOutput"] != "—"; assert state["threads"] == 0; assert state["topologyRate"] == 1; assert state["targetScore"] == 1; assert state["elapsed"] >= 0' <<< "$status_json"
+python3 -c 'import json,math,sys; state=json.load(sys.stdin)["state"]; assert state["page"] == "Learn"; assert state["predictionOutput"] != "—"; assert state["threads"] == 0; assert state["topologyRate"] == 1; assert state["targetScore"] == 1; assert state["elapsed"] >= 0; assert all(math.isfinite(state[key]) for key in ("testScore", "testLoss", "baselineScore", "baselineLoss", "improvementOverBaseline", "meanAbsoluteError", "rSquared")); assert state["balancedAccuracy"] is None' <<< "$status_json"
 print "$status_json"
 print 'Live control self-test passed.'

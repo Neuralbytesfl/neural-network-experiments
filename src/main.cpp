@@ -168,14 +168,21 @@ int train(const Cli& cli) {
 
     neuroevo::EvolutionEngine engine(cli.evolution);
     neuroevo::EvolutionResult result = engine.run(dataset, std::cout);
-    const neuroevo::Metric test = neuroevo::evaluate(result.winner, dataset.test);
+    const neuroevo::EvaluationReport evaluation = neuroevo::evaluateAgainstBaseline(
+        result.winner, dataset.train, dataset.test);
     neuroevo::SavedModel{result.winner, dataset.featureMean, dataset.featureScale,
                          dataset.targetMean, dataset.targetScale,
                          dataset.classValues}.save(cli.output);
 
     std::cout << "winner_validation_score=" << result.winner.validationScore
-              << " winner_test_score=" << test.score
-              << " test_loss=" << test.loss
+              << " winner_test_score=" << evaluation.model.score
+              << " test_loss=" << evaluation.model.loss
+              << " baseline_score=" << evaluation.baseline.score
+              << " baseline_loss=" << evaluation.baseline.loss
+              << " improvement_over_baseline=" << evaluation.improvementOverBaseline
+              << " balanced_accuracy=" << evaluation.balancedAccuracy
+              << " mean_absolute_error=" << evaluation.meanAbsoluteError
+              << " r_squared=" << evaluation.rSquared
               << " parameters=" << result.winner.parameterCount()
               << " evaluations=" << result.evaluations
               << " elapsed_seconds=" << result.elapsedSeconds

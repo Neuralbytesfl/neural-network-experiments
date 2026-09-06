@@ -1,0 +1,64 @@
+name: Quality Gate
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quality-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  portable-cpp:
+    name: Portable C++20
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Configure scalar release build
+        run: cmake -S . -B build-ci -DCMAKE_BUILD_TYPE=Release -DNEUROEVO_ENABLE_ACCELERATE=OFF
+      - name: Build
+        run: cmake --build build-ci --parallel 2
+      - name: Test
+        run: ctest --test-dir build-ci --output-on-failure
+      - name: CLI smoke test
+        run: ./build-ci/neuroevo --data examples/xor.csv --header --dry-run
+
+  sanitizers:
+    name: Address and undefined behavior
+    runs-on: ubuntu-latest
+    env:
+      ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+      UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+    steps:
+      - uses: actions/checkout@v7
+      - name: Configure sanitizer build
+        run: >-
+          cmake -S . -B build-sanitize-ci
+          -DCMAKE_BUILD_TYPE=Debug
+          -DNEUROEVO_ENABLE_ACCELERATE=OFF
+          -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer"
+          -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
+      - name: Build tests
+        run: cmake --build build-sanitize-ci --parallel 2 --target neuroevo_tests
+      - name: Test
+        run: ctest --test-dir build-sanitize-ci --output-on-failure
+
+  apple-native:
+    name: Apple Accelerate and SwiftUI
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v7
+      - name: Configure Accelerate release build
+        run: cmake -S . -B build-apple-ci -DCMAKE_BUILD_TYPE=Release -DNEUROEVO_ENABLE_ACCELERATE=ON
+      - name: Build and test C++
+        run: cmake --build build-apple-ci --parallel 2 && ctest --test-dir build-apple-ci --output-on-failure
+      - name: Build native app target
+        run: swift build -c release
+      - name: Verify developer tooling contracts
+        run: |
+          ./scripts/build-macos-app --help
+          ./scripts/build-dmg --dry-run
+          ./scripts/verify-release --help

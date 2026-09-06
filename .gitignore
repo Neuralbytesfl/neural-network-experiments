@@ -1,6 +1,5 @@
 /build/
-/build-scalar/
-/build-sanitize/
+/build-*/
 *.neuroevo
 .DS_Store
 .backups/
