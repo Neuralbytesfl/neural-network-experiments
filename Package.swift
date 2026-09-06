@@ -11,7 +11,7 @@ let package = Package(
         .target(
             name: "CNeuroevo",
             path: ".",
-            sources: ["src/neuroevo.cpp", "src/c_api.cpp"],
+            sources: ["src/neuroevo.cpp", "src/data_tools.cpp", "src/c_api.cpp"],
             publicHeadersPath: "native/CNeuroevo/include",
             cxxSettings: [
                 .headerSearchPath("include"),
@@ -24,7 +24,7 @@ let package = Package(
             name: "NeuroevoStudio",
             dependencies: ["CNeuroevo"],
             path: "native/NeuroevoStudio",
-            exclude: ["Info.plist"],
+            exclude: ["Info.plist", "Assets"],
             linkerSettings: [
                 .linkedFramework("AppKit"),
                 .linkedFramework("Charts"),

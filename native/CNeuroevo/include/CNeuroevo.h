@@ -81,6 +81,70 @@ typedef struct NEPrediction {
     int is_classification;
 } NEPrediction;
 
+typedef enum NEDataPattern {
+    NE_PATTERN_LINEAR = 0,
+    NE_PATTERN_POLYNOMIAL = 1,
+    NE_PATTERN_SINE = 2,
+    NE_PATTERN_XOR = 3,
+    NE_PATTERN_CIRCLES = 4,
+    NE_PATTERN_CLUSTERS = 5,
+    NE_PATTERN_SPIRAL = 6
+} NEDataPattern;
+
+typedef struct NEGenerateConfig {
+    const char* output_path;
+    NEDataPattern pattern;
+    size_t rows;
+    size_t input_count;
+    double minimum;
+    double maximum;
+    double noise;
+    uint64_t seed;
+    int include_header;
+} NEGenerateConfig;
+
+typedef struct NEGenerateResult {
+    size_t rows_written;
+    size_t input_count;
+    size_t output_count;
+    int is_classification;
+    char formula[256];
+} NEGenerateResult;
+
+typedef struct NEProfileConfig {
+    const char* input_path;
+    int has_header;
+} NEProfileConfig;
+
+typedef struct NEProfileResult {
+    size_t rows;
+    size_t columns;
+    size_t complete_rows;
+    size_t missing_cells;
+    size_t malformed_rows;
+    size_t duplicate_rows;
+} NEProfileResult;
+
+typedef struct NECleanConfig {
+    const char* input_path;
+    const char* output_path;
+    int has_header;
+    size_t target_columns;
+    int impute_missing_features;
+    int remove_duplicates;
+    int drop_malformed_rows;
+    double clip_z_score;
+} NECleanConfig;
+
+typedef struct NECleanResult {
+    size_t rows_read;
+    size_t rows_written;
+    size_t rows_dropped;
+    size_t missing_values_imputed;
+    size_t duplicates_removed;
+    size_t values_clipped;
+} NECleanResult;
+
 void ne_default_config(NEConfig* config);
 const char* ne_backend_name(void);
 
@@ -109,6 +173,21 @@ int ne_predict(const char* model_path,
                size_t error_capacity);
 
 double ne_prediction_value(const NEPrediction* prediction, size_t index);
+
+int ne_generate_dataset(const NEGenerateConfig* config,
+                        NEGenerateResult* result,
+                        char* error,
+                        size_t error_capacity);
+
+int ne_profile_dataset(const NEProfileConfig* config,
+                       NEProfileResult* result,
+                       char* error,
+                       size_t error_capacity);
+
+int ne_clean_dataset(const NECleanConfig* config,
+                     NECleanResult* result,
+                     char* error,
+                     size_t error_capacity);
 
 #ifdef __cplusplus
 }

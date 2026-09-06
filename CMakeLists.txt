@@ -3,7 +3,7 @@ project(neuroevo_cpp VERSION 0.1.0 LANGUAGES CXX)
 
 option(NEUROEVO_ENABLE_ACCELERATE "Use Apple Accelerate when available" ON)
 
-add_library(neuroevo_lib src/neuroevo.cpp)
+add_library(neuroevo_lib src/neuroevo.cpp src/data_tools.cpp)
 target_include_directories(neuroevo_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_features(neuroevo_lib PUBLIC cxx_std_20)
 
@@ -37,6 +37,9 @@ target_link_libraries(neuroevo PRIVATE neuroevo_lib)
 
 add_executable(neuroevo_benchmark tools/benchmark.cpp)
 target_link_libraries(neuroevo_benchmark PRIVATE neuroevo_lib)
+
+add_executable(neuroevo_data_benchmark tools/benchmark_data.cpp)
+target_link_libraries(neuroevo_data_benchmark PRIVATE neuroevo_lib)
 
 include(CTest)
 if(BUILD_TESTING)

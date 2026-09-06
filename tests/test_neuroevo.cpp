@@ -1,4 +1,5 @@
 #include "neuroevo/neuroevo.hpp"
+#include "neuroevo/data_tools.hpp"
 #include "CNeuroevo.h"
 
 #include <cmath>
@@ -167,6 +168,119 @@ void testCBridge() {
     std::filesystem::remove(modelPath);
 }
 
+void testDataGenerationAndCleaning() {
+    const std::vector<neuroevo::DataPattern> patterns{
+        neuroevo::DataPattern::Linear, neuroevo::DataPattern::Polynomial,
+        neuroevo::DataPattern::Sine, neuroevo::DataPattern::Xor,
+        neuroevo::DataPattern::Circles, neuroevo::DataPattern::Clusters,
+        neuroevo::DataPattern::Spiral};
+    for (std::size_t i = 0; i < patterns.size(); ++i) {
+        const auto path = std::filesystem::temp_directory_path() /
+                          ("neuroevo_generated_" + std::to_string(i) + ".csv");
+        neuroevo::GenerateOptions options;
+        options.pattern = patterns[i];
+        options.outputPath = path;
+        options.rows = 80;
+        options.inputCount = 2;
+        options.seed = 100 + i;
+        const auto report = neuroevo::generateDataset(options);
+        require(report.rowsWritten == 80 && !report.formula.empty(), "generation report is invalid");
+        const auto task = report.classification
+            ? neuroevo::TaskType::Classification : neuroevo::TaskType::Regression;
+        const auto dataset = neuroevo::Dataset::loadCsv(path, task, 1, true, 9);
+        require(dataset.inputSize == 2 && dataset.train.samples.size() == 56,
+                "generated dataset is not trainable");
+        std::filesystem::remove(path);
+    }
+
+    const auto first = std::filesystem::temp_directory_path() / "neuroevo_seed_first.csv";
+    const auto second = std::filesystem::temp_directory_path() / "neuroevo_seed_second.csv";
+    neuroevo::GenerateOptions repeatable;
+    repeatable.pattern = neuroevo::DataPattern::Circles;
+    repeatable.outputPath = first;
+    repeatable.rows = 50;
+    repeatable.noise = 0.1;
+    repeatable.seed = 2026;
+    neuroevo::generateDataset(repeatable);
+    repeatable.outputPath = second;
+    neuroevo::generateDataset(repeatable);
+    std::ifstream firstInput(first);
+    std::ifstream secondInput(second);
+    require(std::string(std::istreambuf_iterator<char>(firstInput), {}) ==
+            std::string(std::istreambuf_iterator<char>(secondInput), {}),
+            "same seed did not reproduce generated data");
+    std::filesystem::remove(first);
+    std::filesystem::remove(second);
+
+    const auto bridgeGenerated = std::filesystem::temp_directory_path() / "neuroevo_bridge_generated.csv";
+    const auto bridgeCleaned = std::filesystem::temp_directory_path() / "neuroevo_bridge_cleaned.csv";
+    const std::string bridgeGeneratedPath = bridgeGenerated.string();
+    const std::string bridgeCleanedPath = bridgeCleaned.string();
+    NEGenerateConfig bridgeGeneration{};
+    bridgeGeneration.output_path = bridgeGeneratedPath.c_str();
+    bridgeGeneration.pattern = NE_PATTERN_XOR;
+    bridgeGeneration.rows = 64;
+    bridgeGeneration.input_count = 2;
+    bridgeGeneration.minimum = -1.0;
+    bridgeGeneration.maximum = 1.0;
+    bridgeGeneration.noise = 0.05;
+    bridgeGeneration.seed = 88;
+    bridgeGeneration.include_header = 1;
+    NEGenerateResult bridgeGenerationResult{};
+    char bridgeError[512]{};
+    require(ne_generate_dataset(&bridgeGeneration, &bridgeGenerationResult,
+                                bridgeError, sizeof(bridgeError)) == 0,
+            "C bridge generation failed");
+    require(bridgeGenerationResult.rows_written == 64 &&
+            bridgeGenerationResult.is_classification == 1,
+            "C bridge generation result is wrong");
+    NEProfileConfig bridgeProfileConfig{bridgeGeneratedPath.c_str(), 1};
+    NEProfileResult bridgeProfile{};
+    require(ne_profile_dataset(&bridgeProfileConfig, &bridgeProfile,
+                               bridgeError, sizeof(bridgeError)) == 0 && bridgeProfile.rows == 64,
+            "C bridge profiling failed");
+    NECleanConfig bridgeCleaning{};
+    bridgeCleaning.input_path = bridgeGeneratedPath.c_str();
+    bridgeCleaning.output_path = bridgeCleanedPath.c_str();
+    bridgeCleaning.has_header = 1;
+    bridgeCleaning.target_columns = 1;
+    bridgeCleaning.impute_missing_features = 1;
+    bridgeCleaning.remove_duplicates = 1;
+    bridgeCleaning.drop_malformed_rows = 1;
+    NECleanResult bridgeCleanResult{};
+    require(ne_clean_dataset(&bridgeCleaning, &bridgeCleanResult,
+                             bridgeError, sizeof(bridgeError)) == 0 &&
+            bridgeCleanResult.rows_written > 0,
+            "C bridge cleaning failed");
+    std::filesystem::remove(bridgeGenerated);
+    std::filesystem::remove(bridgeCleaned);
+
+    const auto dirty = std::filesystem::temp_directory_path() / "neuroevo_dirty.csv";
+    const auto clean = std::filesystem::temp_directory_path() / "neuroevo_clean.csv";
+    {
+        std::ofstream file(dirty);
+        file << "a,b,label\n1,2,0\n1,,1\nbad,3,0\n1,2,0\n4,5,?\n";
+    }
+    const auto profile = neuroevo::profileDataset({dirty, true});
+    require(profile.rows == 5 && profile.columns == 3, "profile dimensions are wrong");
+    require(profile.missingCells == 2 && profile.malformedRows == 1 &&
+            profile.duplicateRows == 1, "profile quality counts are wrong");
+
+    neuroevo::CleanOptions cleaning;
+    cleaning.inputPath = dirty;
+    cleaning.outputPath = clean;
+    const auto cleaned = neuroevo::cleanDataset(cleaning);
+    require(cleaned.rowsWritten == 2 && cleaned.rowsDropped == 2,
+            "cleaning row counts are wrong");
+    require(cleaned.missingValuesImputed == 1 && cleaned.duplicatesRemoved == 1,
+            "cleaning operation counts are wrong");
+    const auto cleanProfile = neuroevo::profileDataset({clean, true});
+    require(cleanProfile.rows == 2 && cleanProfile.missingCells == 0 &&
+            cleanProfile.malformedRows == 0, "cleaned output is not numeric and complete");
+    std::filesystem::remove(dirty);
+    std::filesystem::remove(clean);
+}
+
 } // namespace
 
 int main() {
@@ -176,6 +290,7 @@ int main() {
         testDatasetAndModelRoundTrip();
         testSmallEvolution();
         testCBridge();
+        testDataGenerationAndCleaning();
         std::cout << "all tests passed\n";
         return 0;
     } catch (const std::exception& error) {

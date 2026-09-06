@@ -1,4 +1,5 @@
 #include "CNeuroevo.h"
+#include "neuroevo/data_tools.hpp"
 #include "neuroevo/neuroevo.hpp"
 
 #include <algorithm>
@@ -51,6 +52,19 @@ neuroevo::TaskType taskFrom(const NETask task) {
     return task == NE_TASK_REGRESSION
         ? neuroevo::TaskType::Regression
         : neuroevo::TaskType::Classification;
+}
+
+neuroevo::DataPattern patternFrom(const NEDataPattern pattern) {
+    switch (pattern) {
+        case NE_PATTERN_LINEAR: return neuroevo::DataPattern::Linear;
+        case NE_PATTERN_POLYNOMIAL: return neuroevo::DataPattern::Polynomial;
+        case NE_PATTERN_SINE: return neuroevo::DataPattern::Sine;
+        case NE_PATTERN_XOR: return neuroevo::DataPattern::Xor;
+        case NE_PATTERN_CIRCLES: return neuroevo::DataPattern::Circles;
+        case NE_PATTERN_CLUSTERS: return neuroevo::DataPattern::Clusters;
+        case NE_PATTERN_SPIRAL: return neuroevo::DataPattern::Spiral;
+    }
+    throw std::invalid_argument("unknown data pattern");
 }
 
 neuroevo::EvolutionOptions optionsFrom(const NEConfig& config) {
@@ -249,6 +263,74 @@ double ne_prediction_value(const NEPrediction* prediction, size_t index) {
         return std::numeric_limits<double>::quiet_NaN();
     }
     return prediction->values[index];
+}
+
+int ne_generate_dataset(const NEGenerateConfig* config,
+                        NEGenerateResult* result,
+                        char* error,
+                        size_t error_capacity) {
+    return guarded(error, error_capacity, [&] {
+        if (config == nullptr || result == nullptr) {
+            throw std::invalid_argument("generation configuration or result is null");
+        }
+        neuroevo::GenerateOptions options;
+        options.outputPath = config->output_path == nullptr ? "" : config->output_path;
+        options.pattern = patternFrom(config->pattern);
+        options.rows = config->rows;
+        options.inputCount = config->input_count;
+        options.minimum = config->minimum;
+        options.maximum = config->maximum;
+        options.noise = config->noise;
+        options.seed = config->seed;
+        options.includeHeader = config->include_header != 0;
+        const auto generated = neuroevo::generateDataset(options);
+        *result = {};
+        result->rows_written = generated.rowsWritten;
+        result->input_count = generated.inputCount;
+        result->output_count = generated.outputCount;
+        result->is_classification = generated.classification ? 1 : 0;
+        copyString(result->formula, sizeof(result->formula), generated.formula);
+    });
+}
+
+int ne_profile_dataset(const NEProfileConfig* config,
+                       NEProfileResult* result,
+                       char* error,
+                       size_t error_capacity) {
+    return guarded(error, error_capacity, [&] {
+        if (config == nullptr || result == nullptr || config->input_path == nullptr) {
+            throw std::invalid_argument("profile configuration is incomplete");
+        }
+        const auto profile = neuroevo::profileDataset(
+            {std::filesystem::path(config->input_path), config->has_header != 0});
+        *result = {profile.rows, profile.columns, profile.completeRows, profile.missingCells,
+                   profile.malformedRows, profile.duplicateRows};
+    });
+}
+
+int ne_clean_dataset(const NECleanConfig* config,
+                     NECleanResult* result,
+                     char* error,
+                     size_t error_capacity) {
+    return guarded(error, error_capacity, [&] {
+        if (config == nullptr || result == nullptr || config->input_path == nullptr ||
+            config->output_path == nullptr) {
+            throw std::invalid_argument("cleaning configuration is incomplete");
+        }
+        neuroevo::CleanOptions options;
+        options.inputPath = config->input_path;
+        options.outputPath = config->output_path;
+        options.hasHeader = config->has_header != 0;
+        options.targetColumns = config->target_columns;
+        options.imputeMissingFeatures = config->impute_missing_features != 0;
+        options.removeDuplicates = config->remove_duplicates != 0;
+        options.dropMalformedRows = config->drop_malformed_rows != 0;
+        options.clipZScore = config->clip_z_score;
+        const auto cleaned = neuroevo::cleanDataset(options);
+        *result = {cleaned.rowsRead, cleaned.rowsWritten, cleaned.rowsDropped,
+                   cleaned.missingValuesImputed, cleaned.duplicatesRemoved,
+                   cleaned.valuesClipped};
+    });
 }
 
 } // extern "C"
