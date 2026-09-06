@@ -30,6 +30,7 @@ verify_app() {
   codesign --verify --deep --strict --verbose=2 "$app"
   file "$app/Contents/MacOS/NeuroevoStudio" | grep -q 'arm64'
   [[ -f "$app/Contents/Resources/AppIcon.icns" ]]
+  [[ -x "$app/Contents/Resources/studioctl" ]]
   print "Verified app: $app"
 }
 
@@ -43,6 +44,7 @@ elif [[ "$artifact" == *.dmg ]]; then
   hdiutil attach "$artifact" -readonly -nobrowse -mountpoint "$mount_dir" >/dev/null
   verify_app "$mount_dir/NeuroevoStudio.app"
   [[ -L "$mount_dir/Applications" ]]
+  [[ -x "$mount_dir/studioctl" ]]
   print "Verified DMG: $artifact"
 else
   print -u2 'error: expected a .app or .dmg path'

@@ -52,6 +52,7 @@ stage_dir=$(mktemp -d)
 cleanup() { rm -rf "$stage_dir" }
 trap cleanup EXIT
 ditto "${output_path:h}/NeuroevoStudio.app" "$stage_dir/NeuroevoStudio.app"
+ditto "$script_dir/studioctl" "$stage_dir/studioctl"
 ln -s /Applications "$stage_dir/Applications"
 hdiutil create -volname "Neuroevo Studio" -srcfolder "$stage_dir" -ov -format UDZO "$output_path" >/dev/null
 if [[ "$identity" != "-" ]]; then codesign --force --timestamp --sign "$identity" "$output_path"; fi

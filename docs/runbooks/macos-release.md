@@ -40,6 +40,7 @@ Replace the placeholders with existing local values. Use a bundle identifier reg
 - `file` confirms an ARM64 executable.
 - `hdiutil verify` validates the disk-image checksum.
 - The mounted image must include `NeuroevoStudio.app` and an Applications symlink.
+- The app resources and DMG root include the executable `studioctl` controller.
 
 ## Rollback
 Release artifacts are generated under `dist/` and ignored by Git. Delete only the specific generated `.app` and `.dmg`, then rebuild the previous Git revision. Source rollback is `git revert <productization-commit>`.

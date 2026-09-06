@@ -36,6 +36,11 @@ High training performance with lower validation performance can indicate overfit
 ## Apple Silicon
 Evolution uses native C++ threads and Apple Accelerate CPU kernels. Apple does not expose Neural Engine instructions as ordinary C++ intrinsics. Exported Core ML models request CPU and Neural Engine compute, but Core ML decides actual graph placement. Benchmark on the target device.
 
+## Live CLI Control
+Keep the GUI open and run `./scripts/studioctl status` from the project. Commands such as `page create`, `set population 200`, `generate`, `profile`, `clean`, `train`, `stop`, and `predict` update the same Swift observable state as the visible controls. `watch` streams JSON training metrics, and `wait` blocks until a fast or long training run completes.
+
+The CLI uses a private current-user directory under `/tmp`; it does not listen on a network port. Arbitrary property names and arbitrary code execution are rejected. Generation, cleaning, and training require explicit output paths when a GUI file picker would otherwise be needed.
+
 ## Responsible Use
 Predictions are fallible estimates. Do not use this experimental tool as the sole basis for medical, legal, financial, safety-critical, or other high-impact decisions. Validate representative data, bias, privacy, failure handling, and monitoring for the actual use case.
 

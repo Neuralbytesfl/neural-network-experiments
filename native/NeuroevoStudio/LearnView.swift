@@ -115,6 +115,12 @@ struct LearnView: View {
                         ManualSection(title: "CPU and Neural Engine", body: "Neuroevolution training runs in optimized native C++ and uses Apple Accelerate where appropriate. The exported Core ML model can request CPU and Neural Engine compute. Core ML ultimately schedules operations based on support and device availability."),
                         ManualSection(title: "Performance practice", body: "Measure on the target Mac or iPhone with realistic batch sizes. A tiny network may run faster on CPU because dispatch overhead dominates. Hardware eligibility alone is not a benchmark.")
                     ]),
+        ManualTopic(id: "automation", title: "CLI Automation", summary: "Control the open GUI from scripts in real time.", symbol: "terminal",
+                    sections: [
+                        ManualSection(title: "Why it exists", body: "The studioctl command changes the same observable state used by SwiftUI. A script can navigate, update settings, generate or clean data, train, stop, and predict while the open window reflects each command within roughly a tenth of a second."),
+                        ManualSection(title: "Examples", body: "Run scripts/studioctl status to read structured JSON. Use page create to navigate, set generatedRows 600 to change a control, generate --pattern circles --rows 600 --output /tmp/circles.csv to create data, and watch to stream training metrics."),
+                        ManualSection(title: "Local security", body: "Commands use a private per-user directory under /tmp. There is no network listener. Only explicitly supported commands and setting names are accepted, and file-producing actions require an explicit destination path.")
+                    ]),
         ManualTopic(id: "troubleshooting", title: "Troubleshooting", summary: "Resolve common data, training, and export problems.", symbol: "wrench.and.screwdriver",
                     sections: [
                         ManualSection(title: "Dataset rejected", body: "Check that every data cell is numeric, the header setting matches the file, each row has the same column count, there are enough rows for all splits, and target columns are at the end."),

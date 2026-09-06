@@ -128,6 +128,22 @@ open -n dist/NeuroevoStudio.app --args \
 
 Add `--page create`, `--page prepare`, `--page train`, `--page use`, or `--page learn` to open a workflow page directly during development and UI testing.
 
+### Live CLI control
+
+When the GUI is running, `studioctl` changes the same observable state used by SwiftUI, so navigation and settings appear in the window within roughly 100 ms:
+
+```bash
+./scripts/studioctl status
+./scripts/studioctl page create
+./scripts/studioctl set generatedRows 600
+./scripts/studioctl generate --pattern circles --rows 600 \
+  --output "$PWD/build/circles.csv"
+./scripts/studioctl train --output "$PWD/build/circles.neuroevo"
+./scripts/studioctl watch --interval 0.25
+```
+
+Run `./scripts/studioctl --help` for all commands or `./scripts/test-live-control` for an end-to-end packaged-app test. The DMG also includes `studioctl`, and the installed copy is under `NeuroevoStudio.app/Contents/Resources/`. The bridge uses a private per-user temporary directory and does not open a network port.
+
 Full Xcode is not required for this build path; Swift 6 and macOS Command Line Tools are sufficient.
 
 ## Core ML export

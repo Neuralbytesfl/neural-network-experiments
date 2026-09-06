@@ -64,6 +64,7 @@ ditto "$project_dir/native/NeuroevoStudio/Info.plist" "$staged_app/Contents/Info
 [[ -n "$bundle_id" ]] && /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $bundle_id" "$staged_app/Contents/Info.plist"
 [[ -n "$marketing_version" ]] && /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $marketing_version" "$staged_app/Contents/Info.plist"
 ditto "$project_dir/tools/export_coreml.py" "$staged_app/Contents/Resources/export_coreml.py"
+ditto "$project_dir/scripts/studioctl" "$staged_app/Contents/Resources/studioctl"
 ditto "$icon_path" "$staged_app/Contents/Resources/AppIcon.icns"
 if [[ "$identity" == "-" ]]; then
   codesign --force --sign - "$staged_app"

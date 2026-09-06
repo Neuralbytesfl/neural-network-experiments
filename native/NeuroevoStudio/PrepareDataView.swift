@@ -35,7 +35,7 @@ struct PrepareDataView: View {
                         PathButton(title: model.cleanedPath.isEmpty ? "Choose cleaned CSV destination" : "Change destination",
                                    icon: "folder.badge.plus", action: model.chooseCleanedOutput)
                         FilePathRow(label: "Cleaned copy", path: model.cleanedPath)
-                        Button(action: model.cleanCurrentData) {
+                        Button(action: { model.cleanCurrentData() }) {
                             Label("Create cleaned copy", systemImage: "wand.and.stars")
                                 .frame(maxWidth: .infinity, minHeight: 32)
                         }.buttonStyle(.borderedProminent).disabled(model.dataPath.isEmpty)

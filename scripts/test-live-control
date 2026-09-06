@@ -1,0 +1,41 @@
+#!/bin/zsh
+set -euo pipefail
+
+script_dir=${0:A:h}
+project_dir=${script_dir:h}
+dry_run=0
+usage() {
+  print 'Exercise the running Neuroevo Studio app entirely through studioctl.'
+  print ''
+  print 'Usage: scripts/test-live-control [--dry-run] [--help]'
+}
+while (( $# > 0 )); do
+  case "$1" in
+    --dry-run) dry_run=1; shift ;;
+    --help|-h) usage; exit 0 ;;
+    *) print -u2 "error: unknown option: $1"; usage >&2; exit 2 ;;
+  esac
+done
+data_path="$project_dir/build/cli-live-spiral.csv"
+model_path="$project_dir/build/cli-live-spiral.neuroevo"
+if (( dry_run )); then
+  print "data=$data_path"
+  print "model=$model_path"
+  print 'planned=navigate, set, generate, profile, train, wait, predict, open Learn'
+  exit 0
+fi
+ctl="$script_dir/studioctl"
+"$ctl" --compact page create >/dev/null
+"$ctl" --compact set generatedRows 240 >/dev/null
+"$ctl" --compact generate --pattern spiral --rows 240 --noise 0.02 --seed 777 --output "$data_path" >/dev/null
+"$ctl" --compact profile >/dev/null
+"$ctl" --compact train --data "$data_path" --output "$model_path" --task classification --population 48 --generations 30 >/dev/null
+"$ctl" --compact wait --training-timeout 60 >/dev/null
+"$ctl" --compact predict "0.2,-0.1" --model "$model_path" >/dev/null
+"$ctl" --compact page learn >/dev/null
+[[ -s "$data_path" ]] || { print -u2 'error: generated CSV is missing'; exit 1; }
+[[ -s "$model_path" ]] || { print -u2 'error: trained model is missing'; exit 1; }
+status_json=$("$ctl" --compact status)
+python3 -c 'import json,sys; state=json.load(sys.stdin)["state"]; assert state["page"] == "Learn"; assert state["predictionOutput"] != "—"' <<< "$status_json"
+print "$status_json"
+print 'Live control self-test passed.'

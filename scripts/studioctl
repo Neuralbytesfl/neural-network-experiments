@@ -1,0 +1,196 @@
+#!/usr/bin/env python3
+"""Control a running Neuroevo Studio instance through its local JSON queue."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+from pathlib import Path
+import tempfile
+import time
+import uuid
+
+
+def parser() -> argparse.ArgumentParser:
+    result = argparse.ArgumentParser(
+        description="Control a running Neuroevo Studio GUI and return structured state."
+    )
+    result.add_argument("--control-dir", type=Path,
+                        default=Path(f"/tmp/neuroevo-studio-control-{os.getuid()}"))
+    result.add_argument("--timeout", type=float, default=5.0,
+                        help="reply timeout in seconds (default: 5)")
+    result.add_argument("--compact", action="store_true", help="emit one-line JSON")
+    result.add_argument("--dry-run", action="store_true",
+                        help="print the request without contacting the app")
+    commands = result.add_subparsers(dest="command", required=True)
+    commands.add_parser("status", help="return the complete visible application state")
+    commands.add_parser("ping", help="check whether the control bridge responds")
+
+    page = commands.add_parser("page", help="navigate the running GUI")
+    page.add_argument("name", choices=["welcome", "create", "prepare", "train", "use", "learn"])
+
+    setting = commands.add_parser("set", help="change one whitelisted GUI setting")
+    setting.add_argument("name")
+    setting.add_argument("value", help="JSON value, such as 600, 0.05, true, or spiral")
+
+    load = commands.add_parser("load", help="load and inspect a numeric CSV")
+    load.add_argument("path", type=Path)
+    load.add_argument("--task", choices=["classification", "regression"])
+    load.add_argument("--header", choices=["true", "false"])
+    load.add_argument("--targets", type=int)
+
+    generate = commands.add_parser("generate", help="generate data and show it in Data Lab")
+    generate.add_argument("--output", type=Path, required=True)
+    generate.add_argument("--pattern", choices=["linear", "polynomial", "sine", "xor", "circles", "clusters", "spiral"])
+    generate.add_argument("--rows", type=int)
+    generate.add_argument("--inputs", type=int)
+    generate.add_argument("--noise", type=float)
+    generate.add_argument("--seed", type=int)
+
+    commands.add_parser("profile", help="profile current data and open Prepare Data")
+    clean = commands.add_parser("clean", help="clean current data into a new CSV")
+    clean.add_argument("--output", type=Path, required=True)
+
+    train = commands.add_parser("train", help="start evolution and open Train Model")
+    train.add_argument("--data", type=Path)
+    train.add_argument("--output", type=Path)
+    train.add_argument("--task", choices=["classification", "regression"])
+    train.add_argument("--population", type=int)
+    train.add_argument("--generations", type=int)
+    commands.add_parser("stop", help="stop safely after the active generation")
+
+    predict = commands.add_parser("predict", help="predict and open Use Model")
+    predict.add_argument("input", help="comma-separated features")
+    predict.add_argument("--model", type=Path)
+
+    watch = commands.add_parser("watch", help="stream current state as JSON lines")
+    watch.add_argument("--interval", type=float, default=0.25)
+    watch.add_argument("--count", type=int, default=0, help="0 continues until interrupted")
+    wait = commands.add_parser("wait", help="wait for the current training run to finish")
+    wait.add_argument("--interval", type=float, default=0.1)
+    wait.add_argument("--training-timeout", type=float, default=120.0)
+    return result
+
+
+def value_from_text(text: str):
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return text
+
+
+def command_arguments(args: argparse.Namespace) -> dict:
+    command = args.command
+    if command == "page":
+        return {"name": args.name}
+    if command == "set":
+        return {"name": args.name, "value": value_from_text(args.value)}
+    if command == "load":
+        values = {"path": str(args.path.resolve()), "task": args.task,
+                  "targets": args.targets}
+        if args.header is not None:
+            values["header"] = args.header == "true"
+        return {key: value for key, value in values.items() if value is not None}
+    if command == "generate":
+        values = {"output": str(args.output.resolve()), "pattern": args.pattern,
+                  "rows": args.rows, "inputs": args.inputs, "noise": args.noise,
+                  "seed": args.seed}
+        return {key: value for key, value in values.items() if value is not None}
+    if command == "clean":
+        return {"output": str(args.output.resolve())}
+    if command == "train":
+        values = {"data": str(args.data.resolve()) if args.data else None,
+                  "output": str(args.output.resolve()) if args.output else None,
+                  "task": args.task, "population": args.population,
+                  "generations": args.generations}
+        return {key: value for key, value in values.items() if value is not None}
+    if command == "predict":
+        values = {"input": args.input,
+                  "model": str(args.model.resolve()) if args.model else None}
+        return {key: value for key, value in values.items() if value is not None}
+    return {}
+
+
+def assert_running(directory: Path) -> None:
+    ready = directory / "ready.json"
+    try:
+        details = json.loads(ready.read_text(encoding="utf-8"))
+        pid = int(details["pid"])
+        os.kill(pid, 0)
+    except (FileNotFoundError, KeyError, ValueError, ProcessLookupError, PermissionError,
+            json.JSONDecodeError) as error:
+        raise RuntimeError("Neuroevo Studio is not running or its control bridge is unavailable") from error
+
+
+def send(directory: Path, command: str, arguments: dict, timeout: float) -> dict:
+    assert_running(directory)
+    identifier = uuid.uuid4().hex
+    request = {"id": identifier, "command": command, "arguments": arguments}
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    started = time.perf_counter()
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=directory,
+                                     prefix="pending-", suffix=".json", delete=False) as stream:
+        json.dump(request, stream, sort_keys=True)
+        stream.write("\n")
+        pending = Path(stream.name)
+    pending.chmod(0o600)
+    command_path = directory / f"command-{time.time_ns():020d}-{identifier}.json"
+    pending.replace(command_path)
+    reply_path = directory / f"reply-{identifier}.json"
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if reply_path.exists():
+            response = json.loads(reply_path.read_text(encoding="utf-8"))
+            reply_path.unlink(missing_ok=True)
+            response["roundTripMs"] = round((time.perf_counter() - started) * 1000, 3)
+            return response
+        time.sleep(0.02)
+    command_path.unlink(missing_ok=True)
+    raise TimeoutError(f"no reply from Neuroevo Studio within {timeout:g} seconds")
+
+
+def emit(value: dict, compact: bool) -> None:
+    print(json.dumps(value, sort_keys=True, separators=(",", ":") if compact else None,
+                     indent=None if compact else 2))
+
+
+def main() -> int:
+    args = parser().parse_args()
+    arguments = command_arguments(args)
+    if args.dry_run:
+        emit({"controlDirectory": str(args.control_dir), "command": args.command,
+              "arguments": arguments}, args.compact)
+        return 0
+    try:
+        if args.command == "watch":
+            count = 0
+            while args.count == 0 or count < args.count:
+                emit(send(args.control_dir, "status", {}, args.timeout), True)
+                count += 1
+                time.sleep(max(0.02, args.interval))
+            return 0
+        if args.command == "wait":
+            deadline = time.monotonic() + args.training_timeout
+            saw_training = False
+            while time.monotonic() < deadline:
+                response = send(args.control_dir, "status", {}, args.timeout)
+                state = response.get("state", {})
+                saw_training = saw_training or bool(state.get("isTraining"))
+                completed_before_first_poll = (not state.get("isTraining") and
+                                               int(state.get("evaluations", 0)) > 0)
+                if (saw_training and not state.get("isTraining")) or completed_before_first_poll:
+                    emit(response, args.compact)
+                    return 0 if response.get("ok") else 1
+                time.sleep(max(0.02, args.interval))
+            raise TimeoutError("training did not finish before --training-timeout")
+        response = send(args.control_dir, args.command, arguments, args.timeout)
+        emit(response, args.compact)
+        return 0 if response.get("ok") else 1
+    except (RuntimeError, TimeoutError, OSError, json.JSONDecodeError) as error:
+        emit({"ok": False, "error": str(error)}, args.compact)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

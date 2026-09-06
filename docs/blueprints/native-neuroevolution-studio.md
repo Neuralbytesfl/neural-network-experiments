@@ -9,6 +9,7 @@ Make the evolutionary learning process inspectable and controllable through a na
 - `DataLabView` / `PrepareDataView`: generation, import, profiling, cleaning, and preview.
 - `TrainingView` / `UseModelView`: evolution dashboard, native prediction, and Core ML export.
 - `LearnView`: searchable embedded educational manual.
+- `StudioControl`: private local request/reply bridge over the same observable GUI state.
 - Swift Charts: live training and validation series.
 - `TrainingWorker`: background bridge worker and callback owner.
 - `CNeuroevo`: stable C ABI around C++ data tools, evolution, cancellation, and prediction APIs.
@@ -34,6 +35,9 @@ Swift main actor <- copied snapshots <- generation callback
                                                     |
                                                     v
                                     Core ML CPU + Neural Engine allowed
+
+studioctl -> private per-user JSON queue -> StudioModel -> SwiftUI updates
+                                      \-> structured state reply
 ```
 
 ## Control Flow
@@ -51,6 +55,8 @@ Pattern, size, range, noise, generator seed, cleaning recipe, data/output paths,
 
 ## Security
 - No network access is performed by the app.
+- CLI control uses a mode-0700 per-user temporary directory and no network listener.
+- Only whitelisted commands and setting names are accepted.
 - File access is limited to paths selected or supplied by the user.
 - The optional exporter launches a known bundled script with argument arrays, not a shell command string.
 - No secrets are stored.

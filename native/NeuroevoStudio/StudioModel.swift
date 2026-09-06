@@ -242,6 +242,7 @@ private let studioProgressCallback: NEProgressCallback = { progress, context in
 
 @MainActor
 final class StudioModel: ObservableObject {
+    @Published var selectedPage: WorkflowPage? = .welcome
     @Published var dataPath = ""
     @Published var outputPath = ""
     @Published var modelPath = ""
@@ -300,11 +301,15 @@ final class StudioModel: ObservableObject {
     @Published private(set) var cleaningSummary: CleaningSummary?
     @Published private(set) var dataLabStatus = "Configure a pattern, then generate a CSV."
     @Published private(set) var cleaningStatus = "Profile an imported or generated dataset."
+    @Published var controlDirectoryPath = ""
 
     private var worker: TrainingWorker?
 
     init() {
         let arguments = CommandLine.arguments
+        if let index = arguments.firstIndex(of: "--page"), index + 1 < arguments.count {
+            selectedPage = WorkflowPage.parse(arguments[index + 1]) ?? .welcome
+        }
         if let index = arguments.firstIndex(of: "--data"), index + 1 < arguments.count {
             dataPath = arguments[index + 1]
         }
@@ -320,6 +325,7 @@ final class StudioModel: ObservableObject {
             profileCurrentData()
             loadPreview(from: dataPath)
         }
+        prepareControlDirectory()
     }
 
     var backend: String {
@@ -348,9 +354,9 @@ final class StudioModel: ObservableObject {
         if panel.runModal() == .OK, let url = panel.url { generatedPath = url.path }
     }
 
-    func generateSyntheticData() {
+    @discardableResult func generateSyntheticData() -> Bool {
         if generatedPath.isEmpty { chooseGeneratedOutput() }
-        guard !generatedPath.isEmpty else { return }
+        guard !generatedPath.isEmpty else { return false }
         var result = NEGenerateResult()
         var error = [CChar](repeating: 0, count: 1024)
         let code: Int32 = generatedPath.withCString { output in
@@ -369,7 +375,7 @@ final class StudioModel: ObservableObject {
         guard code == 0 else {
             dataLabStatus = decodedCString(error)
             appendLog("Generation error: \(dataLabStatus)")
-            return
+            return false
         }
         generatedFormula = withUnsafePointer(to: &result.formula) {
             $0.withMemoryRebound(to: CChar.self, capacity: 256) { String(cString: $0) }
@@ -385,6 +391,7 @@ final class StudioModel: ObservableObject {
         profileCurrentData()
         inspectDataset()
         loadPreview(from: generatedPath)
+        return true
     }
 
     func profileCurrentData() {
@@ -419,10 +426,10 @@ final class StudioModel: ObservableObject {
         if panel.runModal() == .OK, let url = panel.url { cleanedPath = url.path }
     }
 
-    func cleanCurrentData() {
-        guard !dataPath.isEmpty else { cleaningStatus = "Choose a dataset first"; return }
+    @discardableResult func cleanCurrentData() -> Bool {
+        guard !dataPath.isEmpty else { cleaningStatus = "Choose a dataset first"; return false }
         if cleanedPath.isEmpty { chooseCleanedOutput() }
-        guard !cleanedPath.isEmpty else { return }
+        guard !cleanedPath.isEmpty else { return false }
         var result = NECleanResult()
         var error = [CChar](repeating: 0, count: 1024)
         let code: Int32 = dataPath.withCString { input in
@@ -442,7 +449,7 @@ final class StudioModel: ObservableObject {
         guard code == 0 else {
             cleaningStatus = decodedCString(error)
             appendLog("Cleaning error: \(cleaningStatus)")
-            return
+            return false
         }
         cleaningSummary = CleaningSummary(rowsRead: Int(result.rows_read), rowsWritten: Int(result.rows_written),
                                           rowsDropped: Int(result.rows_dropped), imputed: Int(result.missing_values_imputed),
@@ -456,6 +463,7 @@ final class StudioModel: ObservableObject {
         profileCurrentData()
         inspectDataset()
         loadPreview(from: cleanedPath)
+        return true
     }
 
     func chooseOutput() {
@@ -655,12 +663,12 @@ final class StudioModel: ObservableObject {
         }
     }
 
-    private func appendLog(_ line: String) {
+    func appendLog(_ line: String) {
         logs.append("\(Date.now.formatted(date: .omitted, time: .standard))  \(line)")
         if logs.count > 300 { logs.removeFirst(logs.count - 300) }
     }
 
-    private func loadPreview(from path: String) {
+    func loadPreview(from path: String) {
         guard let content = try? String(contentsOfFile: path, encoding: .utf8) else {
             dataPreview = []
             return

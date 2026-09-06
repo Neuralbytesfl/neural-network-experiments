@@ -10,6 +10,17 @@ enum WorkflowPage: String, CaseIterable, Identifiable {
     case learn = "Learn"
 
     var id: String { rawValue }
+    static func parse(_ value: String) -> WorkflowPage? {
+        switch value.lowercased() {
+        case "welcome", "home": return .welcome
+        case "data", "create": return .dataLab
+        case "prepare", "clean": return .prepare
+        case "train": return .train
+        case "use", "predict": return .useModel
+        case "learn", "help": return .learn
+        default: return nil
+        }
+    }
     var symbol: String {
         switch self {
         case .welcome: return "sparkles"
@@ -33,41 +44,25 @@ enum WorkflowPage: String, CaseIterable, Identifiable {
 
 struct ContentView: View {
     @EnvironmentObject private var model: StudioModel
-    @State private var selection: WorkflowPage?
-
-    init() {
-        let arguments = CommandLine.arguments
-        let requested = arguments.firstIndex(of: "--page").flatMap { index -> WorkflowPage? in
-            guard index + 1 < arguments.count else { return nil }
-            switch arguments[index + 1].lowercased() {
-            case "data", "create": return .dataLab
-            case "prepare", "clean": return .prepare
-            case "train": return .train
-            case "use", "predict": return .useModel
-            case "learn", "help": return .learn
-            default: return .welcome
-            }
-        } ?? .welcome
-        _selection = State(initialValue: requested)
-    }
 
     var body: some View {
         NavigationSplitView {
             sidebar.navigationSplitViewColumnWidth(min: 230, ideal: 250, max: 290)
         } detail: {
             Group {
-                switch selection ?? .welcome {
-                case .welcome: WelcomeView(selection: $selection)
-                case .dataLab: DataLabView(selection: $selection)
-                case .prepare: PrepareDataView(selection: $selection)
-                case .train: TrainingView(selection: $selection)
-                case .useModel: UseModelView(selection: $selection)
+                switch model.selectedPage ?? .welcome {
+                case .welcome: WelcomeView(selection: $model.selectedPage)
+                case .dataLab: DataLabView(selection: $model.selectedPage)
+                case .prepare: PrepareDataView(selection: $model.selectedPage)
+                case .train: TrainingView(selection: $model.selectedPage)
+                case .useModel: UseModelView(selection: $model.selectedPage)
                 case .learn: LearnView()
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Color(nsColor: .windowBackgroundColor))
         }
+        .task { await model.runControlLoop() }
     }
 
     private var sidebar: some View {
@@ -81,7 +76,7 @@ struct ContentView: View {
                 Spacer()
             }.padding(18)
 
-            List(selection: $selection) {
+            List(selection: $model.selectedPage) {
                 Section("WORKSPACE") {
                     ForEach(WorkflowPage.allCases.filter { $0 != .learn }) { page in
                         Label {
@@ -107,6 +102,8 @@ struct ContentView: View {
                       systemImage: model.isTraining ? "circle.dotted" : "checkmark.circle")
                     .font(.caption.bold()).foregroundStyle(model.isTraining ? .mint : .secondary)
                 Text(model.backend).font(.caption2).foregroundStyle(.tertiary).lineLimit(2)
+                Label("CLI control active", systemImage: "terminal")
+                    .font(.caption2).foregroundStyle(.tertiary)
             }.padding(16).frame(maxWidth: .infinity, alignment: .leading)
         }
     }

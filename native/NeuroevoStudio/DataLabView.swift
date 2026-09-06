@@ -35,7 +35,7 @@ struct DataLabView: View {
                         PathButton(title: model.generatedPath.isEmpty ? "Choose CSV destination" : "Change destination",
                                    icon: "folder", action: model.chooseGeneratedOutput)
                         FilePathRow(label: "Output", path: model.generatedPath)
-                        Button(action: model.generateSyntheticData) {
+                        Button(action: { model.generateSyntheticData() }) {
                             Label("Generate dataset", systemImage: "sparkles")
                                 .frame(maxWidth: .infinity, minHeight: 32)
                         }.buttonStyle(.borderedProminent)
