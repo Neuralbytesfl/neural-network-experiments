@@ -83,7 +83,7 @@ swift build -c release
 - [x] DMG mounts, contains the `.app` and Applications link, and passes checksum, ARM64, signature, icon, and property-list checks.
 - [x] Developer script help/dry-run and direct workflow-page launch are available.
 - [ ] Developer ID signing and Apple notarization require the user's Apple credentials.
-- [ ] CI passes on a portable scalar build and an Apple Accelerate/Swift build.
+- [x] CI passes on a portable scalar build, sanitizers, and an Apple Accelerate/Swift build.
 - [x] Classification reports accuracy, balanced accuracy, and majority-class baseline.
 - [x] Regression reports normalized MSE, MAE, R-squared, and train-mean baseline.
 - [x] Classification splitting is deterministic, proportional, and preserves sufficiently represented classes across all three partitions.

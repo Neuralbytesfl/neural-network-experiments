@@ -19,7 +19,7 @@ The engine and training benchmark depended on a C++20 library facility that was 
 Replaced `std::jthread` with `std::thread` in both the production pool and benchmark. The pool retains its explicit stop flag, and both call sites explicitly join every joinable worker before reading results or destroying synchronization state.
 
 ## Result
-Pending the follow-up GitHub Actions run at the time this record was created.
+The follow-up Quality Gate passed all three jobs. The macOS 15 runner built and tested Apple Accelerate C++, built the native SwiftUI release target, and verified the developer-tool contracts. Portable Linux and sanitizer jobs also passed.
 
 ## Reusable Lesson
 Language-standard selection does not guarantee equal standard-library coverage on older Apple runners. Test the minimum supported Apple toolchain and prefer a small compatibility implementation when cancellation tokens are not needed.

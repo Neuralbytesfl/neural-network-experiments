@@ -86,9 +86,11 @@ Confirmed:
 - Version 0.3.0 DMG checksum, property list, Apple Silicon binary, ad-hoc signature, and bundle layout passed release verification.
 
 Not Verified:
-- Remote GitHub Actions status until the commit is pushed.
 - VoiceOver and automated Swift UI tests.
 - Developer ID signing/notarization and clean-machine installation.
+
+Remote verification:
+- GitHub Quality Gate run `34052396173` passed portable C++20, sanitizers, Apple Accelerate C++, SwiftUI release build, and tooling-contract checks.
 
 ## Benchmark
 This phase does not alter the per-generation training hot path. Trust evaluation runs once for the selected winner; no before/after training-speed claim is made.
