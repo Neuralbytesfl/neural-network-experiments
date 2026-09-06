@@ -1,0 +1,63 @@
+#!/bin/zsh
+set -euo pipefail
+
+script_dir=${0:A:h}
+project_dir=${script_dir:h}
+output_path="$project_dir/dist/NeuroevoStudio.dmg"
+identity="-"
+notary_profile=""
+bundle_id=""
+marketing_version=""
+dry_run=0
+usage() {
+  print 'Build a distributable Neuroevo Studio DMG.'
+  print ''
+  print 'Usage: scripts/build-dmg [--output FILE] [--identity NAME] [--notary-profile PROFILE] [--bundle-id ID] [--version X.Y.Z] [--dry-run] [--help]'
+  print ''
+  print '  --identity NAME         Developer ID Application identity; default is ad-hoc'
+  print '  --notary-profile NAME   Existing notarytool keychain profile; requires Developer ID'
+  print '  --dry-run               Print planned operations without writing'
+}
+while (( $# > 0 )); do
+  case "$1" in
+    --output) (( $# >= 2 )) || exit 2; output_path=${2:A}; shift 2 ;;
+    --identity) (( $# >= 2 )) || exit 2; identity=$2; shift 2 ;;
+    --notary-profile) (( $# >= 2 )) || exit 2; notary_profile=$2; shift 2 ;;
+    --bundle-id) (( $# >= 2 )) || exit 2; bundle_id=$2; shift 2 ;;
+    --version) (( $# >= 2 )) || exit 2; marketing_version=$2; shift 2 ;;
+    --dry-run) dry_run=1; shift ;;
+    --help|-h) usage; exit 0 ;;
+    *) print -u2 "error: unknown option: $1"; usage >&2; exit 2 ;;
+  esac
+done
+if [[ -n "$notary_profile" && "$identity" == "-" ]]; then
+  print -u2 'error: notarization requires a Developer ID identity'
+  exit 2
+fi
+if (( dry_run )); then
+  print "output=$output_path"
+  print "identity=$identity"
+  print "notarize=$([[ -n "$notary_profile" ]] && print yes || print no)"
+  print "bundle_id=${bundle_id:-from Info.plist}"
+  print "version=${marketing_version:-from Info.plist}"
+  print 'planned=build app, stage Applications link, create compressed DMG, verify, optionally notarize and staple'
+  exit 0
+fi
+mkdir -p "${output_path:h}"
+app_arguments=(--output "${output_path:h}" --identity "$identity")
+[[ -n "$bundle_id" ]] && app_arguments+=(--bundle-id "$bundle_id")
+[[ -n "$marketing_version" ]] && app_arguments+=(--version "$marketing_version")
+"$script_dir/build-macos-app" "${app_arguments[@]}"
+stage_dir=$(mktemp -d)
+cleanup() { rm -rf "$stage_dir" }
+trap cleanup EXIT
+ditto "${output_path:h}/NeuroevoStudio.app" "$stage_dir/NeuroevoStudio.app"
+ln -s /Applications "$stage_dir/Applications"
+hdiutil create -volname "Neuroevo Studio" -srcfolder "$stage_dir" -ov -format UDZO "$output_path" >/dev/null
+if [[ "$identity" != "-" ]]; then codesign --force --timestamp --sign "$identity" "$output_path"; fi
+if [[ -n "$notary_profile" ]]; then
+  xcrun notarytool submit "$output_path" --keychain-profile "$notary_profile" --wait
+  xcrun stapler staple "$output_path"
+fi
+hdiutil verify "$output_path" >/dev/null
+print "Built $output_path"

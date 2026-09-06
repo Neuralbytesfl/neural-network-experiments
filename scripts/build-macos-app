@@ -4,65 +4,74 @@ set -euo pipefail
 script_dir=${0:A:h}
 project_dir=${script_dir:h}
 output_dir="$project_dir/dist"
+identity="-"
+bundle_id=""
+marketing_version=""
 dry_run=0
 
 usage() {
-  print 'Build and package the native Neuroevo Studio macOS application.'
+  print 'Build, bundle, and sign the native Neuroevo Studio macOS application.'
   print ''
-  print 'Usage: scripts/build-macos-app [--dry-run] [--output DIR] [--help]'
+  print 'Usage: scripts/build-macos-app [--dry-run] [--output DIR] [--identity NAME] [--bundle-id ID] [--version X.Y.Z] [--help]'
   print ''
-  print '  --dry-run     Print resolved inputs and planned operations without writing'
-  print '  --output DIR  Place NeuroevoStudio.app in DIR (default: ./dist)'
-  print '  --help        Show this message'
+  print '  --dry-run       Print resolved operations without writing'
+  print '  --output DIR    Place NeuroevoStudio.app in DIR (default: ./dist)'
+  print '  --identity NAME codesign identity; default "-" performs ad-hoc signing'
+  print '  --bundle-id ID   override the development bundle identifier for distribution'
+  print '  --version X.Y.Z  override the marketing version in the staged bundle'
+  print '  --help          Show this message'
 }
 
 while (( $# > 0 )); do
   case "$1" in
-    --dry-run)
-      dry_run=1
-      shift
-      ;;
-    --output)
-      if (( $# < 2 )); then
-        print -u2 'error: --output requires a directory'
-        exit 2
-      fi
-      output_dir=${2:A}
-      shift 2
-      ;;
-    --help|-h)
-      usage
-      exit 0
-      ;;
-    *)
-      print -u2 "error: unknown option: $1"
-      usage >&2
-      exit 2
-      ;;
+    --dry-run) dry_run=1; shift ;;
+    --output) (( $# >= 2 )) || { print -u2 'error: --output requires a directory'; exit 2; }; output_dir=${2:A}; shift 2 ;;
+    --identity) (( $# >= 2 )) || { print -u2 'error: --identity requires a value'; exit 2; }; identity=$2; shift 2 ;;
+    --bundle-id) (( $# >= 2 )) || exit 2; bundle_id=$2; shift 2 ;;
+    --version) (( $# >= 2 )) || exit 2; marketing_version=$2; shift 2 ;;
+    --help|-h) usage; exit 0 ;;
+    *) print -u2 "error: unknown option: $1"; usage >&2; exit 2 ;;
   esac
 done
+[[ -z "$bundle_id" || "$bundle_id" =~ '^[A-Za-z0-9.-]+$' ]] || { print -u2 'error: invalid bundle identifier'; exit 2; }
+[[ -z "$marketing_version" || "$marketing_version" =~ '^[0-9]+([.][0-9]+){1,2}$' ]] || { print -u2 'error: version must look like X.Y or X.Y.Z'; exit 2; }
 
 app_dir="$output_dir/NeuroevoStudio.app"
-binary_dir="$app_dir/Contents/MacOS"
-resource_dir="$app_dir/Contents/Resources"
-
+icon_path="$project_dir/build/AppIcon.icns"
 if (( dry_run )); then
   print "project=$project_dir"
   print "application=$app_dir"
-  print 'planned=swift release build, bundle assembly, resource copy, ad-hoc code signing'
+  print "identity=$identity"
+  print "bundle_id=${bundle_id:-from Info.plist}"
+  print "version=${marketing_version:-from Info.plist}"
+  print 'planned=release build, icon generation, atomic bundle assembly, code signing'
   exit 0
 fi
 
+mkdir -p "$output_dir" "$project_dir/build"
 cd "$project_dir"
 swift build -c release
 swift_binary_dir=$(swift build -c release --show-bin-path)
+"$script_dir/build-iconset" --output "$icon_path"
 
-mkdir -p "$binary_dir" "$resource_dir"
-cp "$swift_binary_dir/NeuroevoStudio" "$binary_dir/NeuroevoStudio"
-cp "$project_dir/native/NeuroevoStudio/Info.plist" "$app_dir/Contents/Info.plist"
-cp "$project_dir/tools/export_coreml.py" "$resource_dir/export_coreml.py"
-codesign --force --sign - "$app_dir"
-
+staging_dir=$(mktemp -d "$output_dir/.NeuroevoStudio.XXXXXX")
+cleanup() { rm -rf "$staging_dir" }
+trap cleanup EXIT
+staged_app="$staging_dir/NeuroevoStudio.app"
+mkdir -p "$staged_app/Contents/MacOS" "$staged_app/Contents/Resources"
+ditto "$swift_binary_dir/NeuroevoStudio" "$staged_app/Contents/MacOS/NeuroevoStudio"
+ditto "$project_dir/native/NeuroevoStudio/Info.plist" "$staged_app/Contents/Info.plist"
+[[ -n "$bundle_id" ]] && /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $bundle_id" "$staged_app/Contents/Info.plist"
+[[ -n "$marketing_version" ]] && /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $marketing_version" "$staged_app/Contents/Info.plist"
+ditto "$project_dir/tools/export_coreml.py" "$staged_app/Contents/Resources/export_coreml.py"
+ditto "$icon_path" "$staged_app/Contents/Resources/AppIcon.icns"
+if [[ "$identity" == "-" ]]; then
+  codesign --force --sign - "$staged_app"
+else
+  codesign --force --options runtime --timestamp --sign "$identity" "$staged_app"
+fi
+codesign --verify --deep --strict "$staged_app"
+if [[ -e "$app_dir" ]]; then rm -rf "$app_dir"; fi
+mv "$staged_app" "$app_dir"
 print "Built $app_dir"
 print "Launch with: open '$app_dir'"
-

@@ -10,6 +10,8 @@
     <string>local.neuroevo.studio</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>CFBundleName</key>
     <string>Neuroevo Studio</string>
     <key>CFBundlePackageType</key>
@@ -22,8 +24,9 @@
     <string>14.0</string>
     <key>NSHighResolutionCapable</key>
     <true/>
+    <key>NSQuitAlwaysKeepsWindows</key>
+    <false/>
     <key>NSSupportsAutomaticGraphicsSwitching</key>
     <true/>
 </dict>
 </plist>
-

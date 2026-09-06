@@ -87,7 +87,9 @@ Apple references:
 
 Neuroevo Studio is a native SwiftUI and Swift Charts application backed by the same C++ engine. It includes:
 
-- CSV and output-model pickers
+- A guided Create → Prepare → Train → Use workflow
+- Reproducible linear, polynomial, sine, XOR, circles, clusters, and spiral generators
+- CSV quality profiling, conservative cleaning, visual previews, and cleaning audit reports
 - Classification/regression controls
 - Live training and validation chart
 - Dataset split and shape summary
@@ -96,6 +98,7 @@ Neuroevo Studio is a native SwiftUI and Swift Charts application backed by the s
 - Cooperative stop that saves the best model found so far
 - Run logs and raw-row prediction
 - Core ML export and CPU-plus-Neural-Engine-allowed inference
+- A searchable embedded manual for data, leakage, evolution, metrics, deployment, and troubleshooting
 
 Build and package the signed arm64 application:
 
@@ -105,6 +108,16 @@ Build and package the signed arm64 application:
 open dist/NeuroevoStudio.app
 ```
 
+Create and verify an installable DMG:
+
+```bash
+./scripts/build-dmg --dry-run
+./scripts/build-dmg
+./scripts/verify-release dist/NeuroevoStudio.dmg
+```
+
+For local development, use `./scripts/dev-run --help`. For public distribution, pass a Developer ID Application identity to `build-dmg` and an existing `notarytool` keychain profile; see `docs/runbooks/macos-release.md`. Ad-hoc signing is the default and is intended for local testing.
+
 The app can be preloaded for demos or automation:
 
 ```bash
@@ -112,6 +125,8 @@ open -n dist/NeuroevoStudio.app --args \
   --data "$PWD/examples/xor.csv" \
   --output "$PWD/build/gui-xor.neuroevo"
 ```
+
+Add `--page create`, `--page prepare`, `--page train`, `--page use`, or `--page learn` to open a workflow page directly during development and UI testing.
 
 Full Xcode is not required for this build path; Swift 6 and macOS Command Line Tools are sufficient.
 
@@ -140,6 +155,7 @@ Normalization is baked into the first dense layer; regression target de-normaliz
 ```bash
 ./build/neuroevo_benchmark
 ./build-scalar/neuroevo_benchmark
+./build/neuroevo_data_benchmark
 ```
 
 The benchmark fixes its random seed and runs a `32x64x64x4` network. See `docs/benchmarks/m5-pro-neuroevo-backends.md` for captured results.

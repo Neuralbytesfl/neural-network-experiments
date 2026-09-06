@@ -1,0 +1,44 @@
+#!/bin/zsh
+set -euo pipefail
+
+script_dir=${0:A:h}
+project_dir=${script_dir:h}
+source_icon="$project_dir/native/NeuroevoStudio/Assets/AppIcon-1024.png"
+output_icon="$project_dir/build/AppIcon.icns"
+dry_run=0
+usage() {
+  print 'Create a complete macOS .icns file from a square PNG.'
+  print ''
+  print 'Usage: scripts/build-iconset [--input PNG] [--output ICNS] [--dry-run] [--help]'
+}
+while (( $# > 0 )); do
+  case "$1" in
+    --input) (( $# >= 2 )) || exit 2; source_icon=${2:A}; shift 2 ;;
+    --output) (( $# >= 2 )) || exit 2; output_icon=${2:A}; shift 2 ;;
+    --dry-run) dry_run=1; shift ;;
+    --help|-h) usage; exit 0 ;;
+    *) print -u2 "error: unknown option: $1"; usage >&2; exit 2 ;;
+  esac
+done
+[[ -f "$source_icon" ]] || { print -u2 "error: icon source not found: $source_icon"; exit 1; }
+if (( dry_run )); then
+  print "input=$source_icon"
+  print "output=$output_icon"
+  print 'planned=resize 16–1024 pixel iconset, compile with iconutil'
+  exit 0
+fi
+command -v sips >/dev/null || { print -u2 'error: sips is required'; exit 1; }
+command -v iconutil >/dev/null || { print -u2 'error: iconutil is required'; exit 1; }
+mkdir -p "${output_icon:h}"
+work_dir=$(mktemp -d)
+cleanup() { rm -rf "$work_dir" }
+trap cleanup EXIT
+iconset="$work_dir/AppIcon.iconset"
+mkdir -p "$iconset"
+for size in 16 32 128 256 512; do
+  sips -z "$size" "$size" "$source_icon" --out "$iconset/icon_${size}x${size}.png" >/dev/null
+  retina=$(( size * 2 ))
+  sips -z "$retina" "$retina" "$source_icon" --out "$iconset/icon_${size}x${size}@2x.png" >/dev/null
+done
+iconutil -c icns "$iconset" -o "$output_icon"
+print "Built $output_icon"

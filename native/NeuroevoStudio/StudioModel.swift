@@ -24,6 +24,72 @@ struct DatasetSummary: Sendable {
     let test: Int
 }
 
+enum SyntheticPattern: String, CaseIterable, Identifiable, Sendable {
+    case linear = "Linear"
+    case polynomial = "Polynomial"
+    case sine = "Sine wave"
+    case xor = "XOR"
+    case circles = "Circles"
+    case clusters = "Clusters"
+    case spiral = "Spiral"
+
+    var id: String { rawValue }
+    var classification: Bool { [.xor, .circles, .clusters, .spiral].contains(self) }
+    var symbol: String {
+        switch self {
+        case .linear: return "line.diagonal"
+        case .polynomial: return "function"
+        case .sine: return "waveform.path"
+        case .xor: return "square.grid.2x2"
+        case .circles: return "circle.circle"
+        case .clusters: return "circle.grid.cross"
+        case .spiral: return "hurricane"
+        }
+    }
+    var cValue: NEDataPattern {
+        switch self {
+        case .linear: return NE_PATTERN_LINEAR
+        case .polynomial: return NE_PATTERN_POLYNOMIAL
+        case .sine: return NE_PATTERN_SINE
+        case .xor: return NE_PATTERN_XOR
+        case .circles: return NE_PATTERN_CIRCLES
+        case .clusters: return NE_PATTERN_CLUSTERS
+        case .spiral: return NE_PATTERN_SPIRAL
+        }
+    }
+}
+
+struct DataPreviewPoint: Identifiable, Sendable {
+    let id = UUID()
+    let x: Double
+    let y: Double
+    let target: Double
+}
+
+struct QualityProfile: Sendable {
+    let rows: Int
+    let columns: Int
+    let completeRows: Int
+    let missingCells: Int
+    let malformedRows: Int
+    let duplicateRows: Int
+
+    var qualityScore: Double {
+        guard rows > 0 else { return 0 }
+        let issues = Double(malformedRows + duplicateRows) + Double(missingCells) / Double(max(1, columns))
+        return max(0, 1 - issues / Double(rows))
+    }
+}
+
+struct CleaningSummary: Sendable {
+    let rowsRead: Int
+    let rowsWritten: Int
+    let rowsDropped: Int
+    let imputed: Int
+    let duplicatesRemoved: Int
+    let valuesClipped: Int
+}
+
 struct ProgressSnapshot: Sendable {
     let generation: Int
     let limit: Int
@@ -198,6 +264,21 @@ final class StudioModel: ObservableObject {
     @Published var weightSigma = 0.35
     @Published var topologyRate = 0.12
     @Published var complexityPenalty = 0.000001
+    @Published var syntheticPattern: SyntheticPattern = .circles
+    @Published var generatedRows = 1000
+    @Published var generatedInputs = 2
+    @Published var generatedMinimum = -1.0
+    @Published var generatedMaximum = 1.0
+    @Published var generatedNoise = 0.05
+    @Published var generatedSeed: UInt64 = 42
+    @Published var generatedPath = ""
+    @Published var generatedFormula = "Choose a pattern to create a reproducible dataset."
+    @Published var cleanedPath = ""
+    @Published var imputeMissing = true
+    @Published var removeDuplicates = true
+    @Published var dropMalformed = true
+    @Published var clipOutliers = false
+    @Published var clipZScore = 4.0
 
     @Published private(set) var dataset: DatasetSummary?
     @Published private(set) var points: [MetricPoint] = []
@@ -214,6 +295,11 @@ final class StudioModel: ObservableObject {
     @Published private(set) var topology = "—"
     @Published private(set) var status = "Choose a numeric CSV dataset"
     @Published private(set) var logs: [String] = []
+    @Published private(set) var dataPreview: [DataPreviewPoint] = []
+    @Published private(set) var qualityProfile: QualityProfile?
+    @Published private(set) var cleaningSummary: CleaningSummary?
+    @Published private(set) var dataLabStatus = "Configure a pattern, then generate a CSV."
+    @Published private(set) var cleaningStatus = "Profile an imported or generated dataset."
 
     private var worker: TrainingWorker?
 
@@ -231,6 +317,8 @@ final class StudioModel: ObservableObject {
                     .deletingPathExtension().appendingPathExtension("neuroevo").path
             }
             inspectDataset()
+            profileCurrentData()
+            loadPreview(from: dataPath)
         }
     }
 
@@ -248,7 +336,126 @@ final class StudioModel: ObservableObject {
                 outputPath = url.deletingPathExtension().appendingPathExtension("neuroevo").path
             }
             inspectDataset()
+            profileCurrentData()
+            loadPreview(from: dataPath)
         }
+    }
+
+    func chooseGeneratedOutput() {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "\(syntheticPattern.rawValue.lowercased().replacingOccurrences(of: " ", with: "-"))-data.csv"
+        panel.allowedContentTypes = [.commaSeparatedText]
+        if panel.runModal() == .OK, let url = panel.url { generatedPath = url.path }
+    }
+
+    func generateSyntheticData() {
+        if generatedPath.isEmpty { chooseGeneratedOutput() }
+        guard !generatedPath.isEmpty else { return }
+        var result = NEGenerateResult()
+        var error = [CChar](repeating: 0, count: 1024)
+        let code: Int32 = generatedPath.withCString { output in
+            var config = NEGenerateConfig()
+            config.output_path = output
+            config.pattern = syntheticPattern.cValue
+            config.rows = generatedRows
+            config.input_count = syntheticPattern.classification ? 2 : generatedInputs
+            config.minimum = generatedMinimum
+            config.maximum = generatedMaximum
+            config.noise = generatedNoise
+            config.seed = generatedSeed
+            config.include_header = 1
+            return ne_generate_dataset(&config, &result, &error, error.count)
+        }
+        guard code == 0 else {
+            dataLabStatus = decodedCString(error)
+            appendLog("Generation error: \(dataLabStatus)")
+            return
+        }
+        generatedFormula = withUnsafePointer(to: &result.formula) {
+            $0.withMemoryRebound(to: CChar.self, capacity: 256) { String(cString: $0) }
+        }
+        dataPath = generatedPath
+        hasHeader = true
+        targetColumns = 1
+        isRegression = result.is_classification == 0
+        outputPath = URL(fileURLWithPath: generatedPath)
+            .deletingPathExtension().appendingPathExtension("neuroevo").path
+        dataLabStatus = "Generated \(result.rows_written.formatted()) rows · ready to prepare or train"
+        appendLog("Generated \(syntheticPattern.rawValue) dataset with seed \(generatedSeed)")
+        profileCurrentData()
+        inspectDataset()
+        loadPreview(from: generatedPath)
+    }
+
+    func profileCurrentData() {
+        guard !dataPath.isEmpty else { return }
+        var result = NEProfileResult()
+        var error = [CChar](repeating: 0, count: 1024)
+        let code: Int32 = dataPath.withCString { input in
+            var config = NEProfileConfig()
+            config.input_path = input
+            config.has_header = hasHeader ? 1 : 0
+            return ne_profile_dataset(&config, &result, &error, error.count)
+        }
+        if code == 0 {
+            qualityProfile = QualityProfile(rows: Int(result.rows), columns: Int(result.columns),
+                                            completeRows: Int(result.complete_rows),
+                                            missingCells: Int(result.missing_cells),
+                                            malformedRows: Int(result.malformed_rows),
+                                            duplicateRows: Int(result.duplicate_rows))
+            cleaningStatus = result.missing_cells == 0 && result.malformed_rows == 0 && result.duplicate_rows == 0
+                ? "No structural issues detected" : "Review the detected issues, then create a cleaned copy"
+        } else {
+            qualityProfile = nil
+            cleaningStatus = decodedCString(error)
+        }
+    }
+
+    func chooseCleanedOutput() {
+        let panel = NSSavePanel()
+        let source = dataPath.isEmpty ? "dataset" : URL(fileURLWithPath: dataPath).deletingPathExtension().lastPathComponent
+        panel.nameFieldStringValue = "\(source)-clean.csv"
+        panel.allowedContentTypes = [.commaSeparatedText]
+        if panel.runModal() == .OK, let url = panel.url { cleanedPath = url.path }
+    }
+
+    func cleanCurrentData() {
+        guard !dataPath.isEmpty else { cleaningStatus = "Choose a dataset first"; return }
+        if cleanedPath.isEmpty { chooseCleanedOutput() }
+        guard !cleanedPath.isEmpty else { return }
+        var result = NECleanResult()
+        var error = [CChar](repeating: 0, count: 1024)
+        let code: Int32 = dataPath.withCString { input in
+            cleanedPath.withCString { output in
+                var config = NECleanConfig()
+                config.input_path = input
+                config.output_path = output
+                config.has_header = hasHeader ? 1 : 0
+                config.target_columns = targetColumns
+                config.impute_missing_features = imputeMissing ? 1 : 0
+                config.remove_duplicates = removeDuplicates ? 1 : 0
+                config.drop_malformed_rows = dropMalformed ? 1 : 0
+                config.clip_z_score = clipOutliers ? clipZScore : 0
+                return ne_clean_dataset(&config, &result, &error, error.count)
+            }
+        }
+        guard code == 0 else {
+            cleaningStatus = decodedCString(error)
+            appendLog("Cleaning error: \(cleaningStatus)")
+            return
+        }
+        cleaningSummary = CleaningSummary(rowsRead: Int(result.rows_read), rowsWritten: Int(result.rows_written),
+                                          rowsDropped: Int(result.rows_dropped), imputed: Int(result.missing_values_imputed),
+                                          duplicatesRemoved: Int(result.duplicates_removed),
+                                          valuesClipped: Int(result.values_clipped))
+        dataPath = cleanedPath
+        outputPath = URL(fileURLWithPath: cleanedPath).deletingPathExtension()
+            .appendingPathExtension("neuroevo").path
+        cleaningStatus = "Cleaned copy created · source preserved"
+        appendLog("Cleaned dataset: \(result.rows_written) rows retained")
+        profileCurrentData()
+        inspectDataset()
+        loadPreview(from: cleanedPath)
     }
 
     func chooseOutput() {
@@ -451,6 +658,24 @@ final class StudioModel: ObservableObject {
     private func appendLog(_ line: String) {
         logs.append("\(Date.now.formatted(date: .omitted, time: .standard))  \(line)")
         if logs.count > 300 { logs.removeFirst(logs.count - 300) }
+    }
+
+    private func loadPreview(from path: String) {
+        guard let content = try? String(contentsOfFile: path, encoding: .utf8) else {
+            dataPreview = []
+            return
+        }
+        let lines = content.split(whereSeparator: \.isNewline)
+        let start = hasHeader ? 1 : 0
+        dataPreview = lines.dropFirst(start).prefix(800).compactMap { line in
+            let values = line.split(separator: ",", omittingEmptySubsequences: false).compactMap {
+                Double($0.trimmingCharacters(in: .whitespaces))
+            }
+            guard values.count >= 2 else { return nil }
+            let x = values[0]
+            let y = values.count > 2 ? values[1] : x
+            return DataPreviewPoint(x: x, y: y, target: values.last ?? 0)
+        }
     }
 
     private func parseFeatures(_ text: String) throws -> [Float] {

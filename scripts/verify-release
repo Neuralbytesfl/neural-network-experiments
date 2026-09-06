@@ -1,0 +1,50 @@
+#!/bin/zsh
+set -euo pipefail
+
+dry_run=0
+artifact=""
+usage() {
+  print 'Verify a Neuroevo Studio .app or .dmg release artifact.'
+  print ''
+  print 'Usage: scripts/verify-release [--dry-run] PATH'
+}
+while (( $# > 0 )); do
+  case "$1" in
+    --dry-run) dry_run=1; shift ;;
+    --help|-h) usage; exit 0 ;;
+    -*) print -u2 "error: unknown option: $1"; usage >&2; exit 2 ;;
+    *) [[ -z "$artifact" ]] || { print -u2 'error: provide one artifact'; exit 2; }; artifact=${1:A}; shift ;;
+  esac
+done
+[[ -n "$artifact" ]] || { usage >&2; exit 2; }
+if (( dry_run )); then
+  print "artifact=$artifact"
+  print 'planned=plist, architecture, signature, and disk-image integrity checks'
+  exit 0
+fi
+[[ -e "$artifact" ]] || { print -u2 "error: artifact not found: $artifact"; exit 1; }
+
+verify_app() {
+  local app=$1
+  plutil -lint "$app/Contents/Info.plist"
+  codesign --verify --deep --strict --verbose=2 "$app"
+  file "$app/Contents/MacOS/NeuroevoStudio" | grep -q 'arm64'
+  [[ -f "$app/Contents/Resources/AppIcon.icns" ]]
+  print "Verified app: $app"
+}
+
+if [[ "$artifact" == *.app ]]; then
+  verify_app "$artifact"
+elif [[ "$artifact" == *.dmg ]]; then
+  hdiutil verify "$artifact" >/dev/null
+  mount_dir=$(mktemp -d)
+  cleanup() { hdiutil detach "$mount_dir" -quiet 2>/dev/null || true; rmdir "$mount_dir" 2>/dev/null || true }
+  trap cleanup EXIT
+  hdiutil attach "$artifact" -readonly -nobrowse -mountpoint "$mount_dir" >/dev/null
+  verify_app "$mount_dir/NeuroevoStudio.app"
+  [[ -L "$mount_dir/Applications" ]]
+  print "Verified DMG: $artifact"
+else
+  print -u2 'error: expected a .app or .dmg path'
+  exit 2
+fi

@@ -1,0 +1,38 @@
+#!/bin/zsh
+set -euo pipefail
+
+script_dir=${0:A:h}
+project_dir=${script_dir:h}
+dry_run=0
+data_path=""
+output_path=""
+page=""
+usage() {
+  print 'Build and run Neuroevo Studio for local development.'
+  print ''
+  print 'Usage: scripts/dev-run [--data CSV] [--output MODEL] [--page PAGE] [--dry-run] [--help]'
+}
+while (( $# > 0 )); do
+  case "$1" in
+    --data) (( $# >= 2 )) || exit 2; data_path=${2:A}; shift 2 ;;
+    --output) (( $# >= 2 )) || exit 2; output_path=${2:A}; shift 2 ;;
+    --page) (( $# >= 2 )) || exit 2; page=$2; shift 2 ;;
+    --dry-run) dry_run=1; shift ;;
+    --help|-h) usage; exit 0 ;;
+    *) print -u2 "error: unknown option: $1"; usage >&2; exit 2 ;;
+  esac
+done
+args=()
+[[ -n "$data_path" ]] && args+=(--data "$data_path")
+[[ -n "$output_path" ]] && args+=(--output "$output_path")
+[[ -n "$page" ]] && args+=(--page "$page")
+if (( dry_run )); then
+  print "project=$project_dir"
+  print "arguments=${(q)args}"
+  print 'planned=swift debug build and launch'
+  exit 0
+fi
+cd "$project_dir"
+swift build
+binary_dir=$(swift build --show-bin-path)
+exec "$binary_dir/NeuroevoStudio" "${args[@]}"

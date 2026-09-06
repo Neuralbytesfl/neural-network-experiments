@@ -1,286 +1,234 @@
-import Charts
+import AppKit
 import SwiftUI
+
+enum WorkflowPage: String, CaseIterable, Identifiable {
+    case welcome = "Welcome"
+    case dataLab = "Create Data"
+    case prepare = "Prepare Data"
+    case train = "Train Model"
+    case useModel = "Use Model"
+    case learn = "Learn"
+
+    var id: String { rawValue }
+    var symbol: String {
+        switch self {
+        case .welcome: return "sparkles"
+        case .dataLab: return "tablecells.badge.ellipsis"
+        case .prepare: return "wand.and.stars"
+        case .train: return "point.3.connected.trianglepath.dotted"
+        case .useModel: return "bolt.horizontal.circle"
+        case .learn: return "book.closed"
+        }
+    }
+    var step: String? {
+        switch self {
+        case .dataLab: return "1"
+        case .prepare: return "2"
+        case .train: return "3"
+        case .useModel: return "4"
+        default: return nil
+        }
+    }
+}
 
 struct ContentView: View {
     @EnvironmentObject private var model: StudioModel
+    @State private var selection: WorkflowPage?
+
+    init() {
+        let arguments = CommandLine.arguments
+        let requested = arguments.firstIndex(of: "--page").flatMap { index -> WorkflowPage? in
+            guard index + 1 < arguments.count else { return nil }
+            switch arguments[index + 1].lowercased() {
+            case "data", "create": return .dataLab
+            case "prepare", "clean": return .prepare
+            case "train": return .train
+            case "use", "predict": return .useModel
+            case "learn", "help": return .learn
+            default: return .welcome
+            }
+        } ?? .welcome
+        _selection = State(initialValue: requested)
+    }
 
     var body: some View {
         NavigationSplitView {
-            configuration
-                .navigationSplitViewColumnWidth(min: 300, ideal: 330, max: 380)
+            sidebar.navigationSplitViewColumnWidth(min: 230, ideal: 250, max: 290)
         } detail: {
-            dashboard
+            Group {
+                switch selection ?? .welcome {
+                case .welcome: WelcomeView(selection: $selection)
+                case .dataLab: DataLabView(selection: $selection)
+                case .prepare: PrepareDataView(selection: $selection)
+                case .train: TrainingView(selection: $selection)
+                case .useModel: UseModelView(selection: $selection)
+                case .learn: LearnView()
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color(nsColor: .windowBackgroundColor))
         }
-        .background(Color(nsColor: .windowBackgroundColor))
     }
 
-    private var configuration: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("NEUROEVO").font(.caption.bold()).foregroundStyle(.secondary)
-                    Text("Studio").font(.largeTitle.bold())
-                    Text("Evolve. Compare. Understand.").foregroundStyle(.secondary)
+    private var sidebar: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                Image(nsImage: NSApp.applicationIconImage).resizable().frame(width: 44, height: 44)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Neuroevo").font(.headline)
+                    Text("Studio").font(.caption).foregroundStyle(.secondary)
                 }
+                Spacer()
+            }.padding(18)
 
-                section("DATA") {
-                    pathButton(title: model.dataPath.isEmpty ? "Choose CSV…" : URL(fileURLWithPath: model.dataPath).lastPathComponent,
-                               icon: "tablecells", action: model.chooseDataset)
-                    Picker("Task", selection: $model.isRegression) {
-                        Text("Classification").tag(false)
-                        Text("Regression").tag(true)
-                    }.pickerStyle(.segmented)
-                    Toggle("CSV has header", isOn: $model.hasHeader)
-                    Stepper("Target columns: \(model.targetColumns)", value: $model.targetColumns, in: 1...32)
-                    Button("Refresh dataset", action: model.inspectDataset).disabled(model.dataPath.isEmpty)
-                }
-
-                section("EVOLUTION") {
-                    numberField("Population", value: $model.population)
-                    numberField("Generations", value: $model.generations)
-                    numberField("Elite", value: $model.elite)
-                    numberField("Initial hidden", value: $model.initialHidden)
-                    numberField("Patience", value: $model.patience)
-                    numberField("Threads (0 = auto)", value: $model.threads)
-                    HStack { Text("Seed"); Spacer(); TextField("Seed", value: $model.seed, format: .number).frame(width: 110) }
-                    decimalField("Target score", value: $model.targetScore)
-                    DisclosureGroup("Advanced mutation") {
-                        VStack(spacing: 10) {
-                            decimalField("Weight rate", value: $model.weightRate)
-                            decimalField("Weight sigma", value: $model.weightSigma)
-                            decimalField("Topology rate", value: $model.topologyRate)
-                            decimalField("Complexity", value: $model.complexityPenalty)
-                        }.padding(.top, 8)
+            List(selection: $selection) {
+                Section("WORKSPACE") {
+                    ForEach(WorkflowPage.allCases.filter { $0 != .learn }) { page in
+                        Label {
+                            HStack {
+                                Text(page.rawValue)
+                                Spacer()
+                                if let step = page.step {
+                                    Text(step).font(.caption2.bold()).foregroundStyle(.secondary)
+                                        .frame(width: 20, height: 20).background(.quaternary, in: Circle())
+                                }
+                            }
+                        } icon: { Image(systemName: page.symbol) }
+                        .tag(page)
                     }
                 }
-
-                section("OUTPUT") {
-                    pathButton(title: model.outputPath.isEmpty ? "Choose model destination…" : URL(fileURLWithPath: model.outputPath).lastPathComponent,
-                               icon: "externaldrive", action: model.chooseOutput)
+                Section("GUIDANCE") {
+                    Label(WorkflowPage.learn.rawValue, systemImage: WorkflowPage.learn.symbol).tag(WorkflowPage.learn)
                 }
+            }.listStyle(.sidebar)
 
-                if model.isTraining {
-                    Button(role: .destructive, action: model.stopTraining) {
-                        Label("Stop safely", systemImage: "stop.fill").frame(maxWidth: .infinity)
-                    }.buttonStyle(.borderedProminent)
-                } else {
-                    Button(action: model.startTraining) {
-                        Label("Start evolution", systemImage: "play.fill").frame(maxWidth: .infinity)
-                    }.buttonStyle(.borderedProminent)
-                        .controlSize(.large)
-                        .disabled(model.dataPath.isEmpty || model.outputPath.isEmpty)
-                }
-
-                Text(model.backend).font(.caption).foregroundStyle(.secondary)
-            }
-            .padding(22)
+            VStack(alignment: .leading, spacing: 6) {
+                Label(model.isTraining ? "Evolution running" : "Ready",
+                      systemImage: model.isTraining ? "circle.dotted" : "checkmark.circle")
+                    .font(.caption.bold()).foregroundStyle(model.isTraining ? .mint : .secondary)
+                Text(model.backend).font(.caption2).foregroundStyle(.tertiary).lineLimit(2)
+            }.padding(16).frame(maxWidth: .infinity, alignment: .leading)
         }
     }
+}
 
-    private var dashboard: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                HStack {
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text("Evolution dashboard").font(.title.bold())
-                        Text(model.status).foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    statusPill
-                }
-
-                ProgressView(value: model.progress)
-                    .tint(.mint)
-
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 4), spacing: 12) {
-                    metricCard("GENERATION", "\(model.generation)", "arrow.triangle.2.circlepath")
-                    metricCard("VALIDATION", score(model.validationScore), "checkmark.seal")
-                    metricCard("TEST", model.testScore.map(score) ?? "—", "lock.shield")
-                    metricCard("PARAMETERS", model.parameterCount.formatted(), "point.3.connected.trianglepath.dotted")
-                }
-
-                HStack(alignment: .top, spacing: 14) {
-                    chartPanel.frame(minWidth: 520, minHeight: 320)
-                    VStack(spacing: 14) {
-                        datasetPanel
-                        topologyPanel
-                    }.frame(width: 310)
-                }
-
-                HStack(alignment: .top, spacing: 14) {
-                    predictionPanel
-                    coreMLPanel
-                }
-
-                logPanel
-            }
-            .padding(24)
-        }
+struct PageHeader: View {
+    let eyebrow: String
+    let title: String
+    let subtitle: String
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(eyebrow.uppercased()).font(.caption.bold()).foregroundStyle(.mint)
+            Text(title).font(.system(size: 34, weight: .bold, design: .rounded))
+            Text(subtitle).font(.title3).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        }.frame(maxWidth: .infinity, alignment: .leading)
     }
+}
 
-    private var statusPill: some View {
-        HStack(spacing: 7) {
-            Circle().fill(model.isTraining ? .mint : .secondary).frame(width: 8, height: 8)
-            Text(model.isTraining ? "RUNNING" : "IDLE").font(.caption.bold())
-        }
-        .padding(.horizontal, 12).padding(.vertical, 7)
-        .background(.thinMaterial, in: Capsule())
+struct StudioPanel<Content: View>: View {
+    let title: String
+    let subtitle: String
+    @ViewBuilder let content: Content
+    init(_ title: String, subtitle: String, @ViewBuilder content: () -> Content) {
+        self.title = title; self.subtitle = subtitle; self.content = content()
     }
-
-    private var chartPanel: some View {
-        panel("Performance", subtitle: "Training and validation across generations") {
-            if model.points.isEmpty {
-                ContentUnavailableView("No generations yet", systemImage: "chart.xyaxis.line",
-                                       description: Text("Start evolution to stream metrics."))
-            } else {
-                Chart(model.points) { point in
-                    LineMark(x: .value("Generation", point.generation),
-                             y: .value("Training", point.train))
-                        .foregroundStyle(by: .value("Metric", "Training"))
-                    LineMark(x: .value("Generation", point.generation),
-                             y: .value("Validation", point.validation))
-                        .foregroundStyle(by: .value("Metric", "Validation"))
-                        .lineStyle(StrokeStyle(lineWidth: 2.5))
-                }
-                .chartForegroundStyleScale(["Training": Color.indigo, "Validation": Color.mint])
-                .chartLegend(position: .top, alignment: .leading)
-                .chartXAxisLabel("Generation")
-                .chartYAxisLabel(model.isRegression ? "Score (−MSE)" : "Accuracy")
-                .padding(.top, 8)
-            }
-        }
-    }
-
-    private var datasetPanel: some View {
-        panel("Dataset", subtitle: model.dataPath.isEmpty ? "No file selected" : URL(fileURLWithPath: model.dataPath).lastPathComponent) {
-            if let data = model.dataset {
-                HStack {
-                    smallMetric("INPUTS", data.inputs)
-                    smallMetric("OUTPUTS", data.outputs)
-                    smallMetric("CLASSES", data.classes)
-                }
-                Divider()
-                splitRow("Train", data.train, color: .indigo)
-                splitRow("Validation", data.validation, color: .mint)
-                splitRow("Test", data.test, color: .orange)
-            } else {
-                Text("Choose a CSV to inspect its shape and split.").foregroundStyle(.secondary)
-            }
-        }
-    }
-
-    private var topologyPanel: some View {
-        panel("Best topology", subtitle: "Current validation champion") {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    let nodes = model.topology.components(separatedBy: " → ")
-                    ForEach(Array(nodes.enumerated()), id: \.offset) { index, node in
-                        Text(node).font(.headline.monospacedDigit())
-                            .frame(minWidth: 44, minHeight: 44)
-                            .background(index == 0 ? Color.indigo.opacity(0.18) : Color.mint.opacity(0.18),
-                                        in: RoundedRectangle(cornerRadius: 11))
-                        if index + 1 < nodes.count { Image(systemName: "arrow.right").foregroundStyle(.secondary) }
-                    }
-                }
-            }
-            Text("\(model.evaluations.formatted()) evaluations · \(String(format: "%.2f", model.elapsed))s")
-                .font(.caption).foregroundStyle(.secondary)
-        }
-    }
-
-    private var predictionPanel: some View {
-        panel("Native C++ prediction", subtitle: "Run the saved winner") {
-            HStack {
-                TextField("Comma-separated features", text: $model.predictionInput)
-                    .textFieldStyle(.roundedBorder)
-                Button("Predict", action: model.predict)
-                Button("Choose model", action: model.chooseModel)
-            }
-            Text(model.predictionOutput).font(.system(.body, design: .monospaced)).textSelection(.enabled)
-        }
-    }
-
-    private var coreMLPanel: some View {
-        panel("Core ML deployment", subtitle: "CPU + Neural Engine allowed") {
-            HStack {
-                Button("Export winner", action: model.exportCoreML)
-                Button("Run Core ML", action: model.runCoreMLPrediction).disabled(model.coreMLPath.isEmpty)
-            }
-            Text(model.coreMLStatus).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
-        }
-    }
-
-    private var logPanel: some View {
-        panel("Run log", subtitle: "Latest engine and application events") {
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 5) {
-                    ForEach(Array(model.logs.enumerated()), id: \.offset) { _, line in
-                        Text(line).font(.system(.caption, design: .monospaced)).frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                }
-            }.frame(height: 140)
-        }
-    }
-
-    private func section<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 11) {
-            Text(title).font(.caption.bold()).foregroundStyle(.secondary)
-            content()
-        }
-    }
-
-    private func panel<Content: View>(_ title: String, subtitle: String,
-                                      @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            VStack(alignment: .leading, spacing: 2) {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 3) {
                 Text(title).font(.headline)
                 Text(subtitle).font(.caption).foregroundStyle(.secondary)
             }
-            content()
+            content
         }
-        .padding(17)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(18).frame(maxWidth: .infinity, alignment: .leading)
         .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 16))
-        .overlay(RoundedRectangle(cornerRadius: 16).stroke(.separator.opacity(0.4)))
+        .overlay(RoundedRectangle(cornerRadius: 16).stroke(.separator.opacity(0.35)))
     }
+}
 
-    private func metricCard(_ title: String, _ value: String, _ icon: String) -> some View {
+struct HelpNote: View {
+    let title: String
+    let text: String
+    var body: some View {
+        HStack(alignment: .top, spacing: 11) {
+            Image(systemName: "lightbulb.max.fill").foregroundStyle(.yellow)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title).font(.subheadline.bold())
+                Text(text).font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .padding(13).frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.yellow.opacity(0.07), in: RoundedRectangle(cornerRadius: 12))
+    }
+}
+
+struct MetricCard: View {
+    let title: String
+    let value: String
+    let symbol: String
+    var color: Color = .mint
+    var body: some View {
         HStack {
             VStack(alignment: .leading, spacing: 7) {
-                Text(title).font(.caption.bold()).foregroundStyle(.secondary)
-                Text(value).font(.title2.bold().monospacedDigit())
-                    .lineLimit(1).minimumScaleFactor(0.55)
+                Text(title.uppercased()).font(.caption2.bold()).foregroundStyle(.secondary)
+                Text(value).font(.title2.bold().monospacedDigit()).lineLimit(1).minimumScaleFactor(0.55)
             }
             Spacer()
-            Image(systemName: icon).font(.title2).foregroundStyle(.mint)
+            Image(systemName: symbol).font(.title2).foregroundStyle(color)
         }
-        .padding(16)
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 15))
+        .padding(16).background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 14))
     }
+}
 
-    private func pathButton(title: String, icon: String, action: @escaping () -> Void) -> some View {
+struct PathButton: View {
+    let title: String
+    let icon: String
+    let action: () -> Void
+    var body: some View {
         Button(action: action) {
             Label(title, systemImage: icon).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
         }.buttonStyle(.bordered)
     }
+}
 
-    private func numberField(_ label: String, value: Binding<Int>) -> some View {
-        HStack { Text(label); Spacer(); TextField(label, value: value, format: .number).frame(width: 90) }
+struct NumberSetting: View {
+    let title: String
+    @Binding var value: Int
+    var range: ClosedRange<Int> = 0...1_000_000
+    var body: some View {
+        HStack {
+            Text(title); Spacer()
+            TextField(title, value: $value, format: .number).frame(width: 90)
+                .onChange(of: value) { _, newValue in value = min(range.upperBound, max(range.lowerBound, newValue)) }
+        }
     }
+}
 
-    private func decimalField(_ label: String, value: Binding<Double>) -> some View {
-        HStack { Text(label); Spacer(); TextField(label, value: value, format: .number).frame(width: 90) }
+struct DoubleSetting: View {
+    let title: String
+    @Binding var value: Double
+    var range: ClosedRange<Double>
+    var body: some View {
+        HStack {
+            Text(title); Spacer()
+            TextField(title, value: $value, format: .number.precision(.fractionLength(0...6)))
+                .frame(width: 100)
+                .onChange(of: value) { _, newValue in
+                    value = min(range.upperBound, max(range.lowerBound, newValue))
+                }
+        }
     }
+}
 
-    private func smallMetric(_ label: String, _ value: Int) -> some View {
-        VStack(alignment: .leading) { Text(label).font(.caption2).foregroundStyle(.secondary); Text(value.formatted()).font(.headline) }
-            .frame(maxWidth: .infinity, alignment: .leading)
+struct FilePathRow: View {
+    let label: String
+    let path: String
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(label.uppercased()).font(.caption2.bold()).foregroundStyle(.secondary)
+            Text(path.isEmpty ? "Not selected" : path)
+                .font(.caption.monospaced()).foregroundStyle(path.isEmpty ? .tertiary : .secondary)
+                .lineLimit(2).textSelection(.enabled)
+        }.frame(maxWidth: .infinity, alignment: .leading)
     }
-
-    private func splitRow(_ label: String, _ count: Int, color: Color) -> some View {
-        HStack { Circle().fill(color).frame(width: 7, height: 7); Text(label); Spacer(); Text(count.formatted()).monospacedDigit() }
-            .font(.subheadline)
-    }
-
-    private func score(_ value: Double) -> String { String(format: "%.5f", value) }
 }

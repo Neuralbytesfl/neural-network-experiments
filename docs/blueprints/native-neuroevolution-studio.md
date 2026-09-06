@@ -5,17 +5,24 @@ Make the evolutionary learning process inspectable and controllable through a na
 
 ## Components
 - `StudioModel`: main-actor Swift observable state.
-- `ContentView`: SwiftUI dashboard and configuration sidebar.
+- `ContentView`: workflow navigation shell and shared visual components.
+- `DataLabView` / `PrepareDataView`: generation, import, profiling, cleaning, and preview.
+- `TrainingView` / `UseModelView`: evolution dashboard, native prediction, and Core ML export.
+- `LearnView`: searchable embedded educational manual.
 - Swift Charts: live training and validation series.
 - `TrainingWorker`: background bridge worker and callback owner.
-- `CNeuroevo`: stable C ABI around C++ dataset, evolution, cancellation, and prediction APIs.
+- `CNeuroevo`: stable C ABI around C++ data tools, evolution, cancellation, and prediction APIs.
+- `data_tools`: deterministic synthetic generator plus auditable CSV profiler/cleaner.
 - `EvolutionEngine`: existing C++ implementation with generation callbacks.
 - `export_coreml.py`: optional Core ML model exporter.
 - `verify_coreml.swift`: native Core ML inference verifier.
-- `build-macos-app`: SwiftPM build and `.app` packaging workflow.
+- Release scripts: iconset, SwiftPM app bundle, DMG, Developer ID/notarization hooks, and verification.
 
 ## Data Flow
 ```text
+Preset/import -> C++ generate/profile/clean -> prepared CSV
+                                              |
+                                              v
 CSV picker -> Swift settings -> C ABI -> C++ Dataset/EvolutionEngine
                                       |
                                       v
@@ -30,27 +37,29 @@ Swift main actor <- copied snapshots <- generation callback
 ```
 
 ## Control Flow
-1. Swift selects and inspects a CSV through the C bridge.
-2. A background worker owns the opaque training session.
-3. C++ evaluates a generation and invokes one callback.
-4. Swift copies the callback payload before the C strings expire.
-5. A main-actor task updates observable UI state.
+1. Swift generates or imports a CSV, then profiles it through the C bridge.
+2. Optional cleaning writes a separate output and returns exact audit counts.
+3. A background worker owns the opaque training session.
+4. C++ evaluates a generation and invokes one callback.
+5. Swift copies callback values and updates main-actor UI state.
 6. Stop sets an atomic flag; C++ exits after the current generation and saves its hall-of-fame model.
 7. Prediction calls the saved-model C API.
 8. Optional Core ML export bakes normalization into dense weights and biases.
 
 ## Configuration
-Data/output paths, task, header, target columns, population, generations, elites, threads, seed, hidden width, patience, score target, mutation parameters, and complexity penalty are editable.
+Pattern, size, range, noise, generator seed, cleaning recipe, data/output paths, task, header, target columns, population, generations, elites, threads, model seed, hidden width, patience, score target, mutation parameters, and complexity penalty are editable.
 
 ## Security
 - No network access is performed by the app.
 - File access is limited to paths selected or supplied by the user.
 - The optional exporter launches a known bundled script with argument arrays, not a shell command string.
 - No secrets are stored.
+- Source datasets are never overwritten by cleaning.
 - The local app is ad-hoc signed and initially unsandboxed.
 
 ## Failure Modes
 - Invalid CSV or evolution configuration is returned through a bounded error buffer.
+- Malformed rows, missing targets, and unwritable destinations return actionable errors.
 - Missing Core ML Python dependencies produces an actionable message.
 - Cancellation waits for the active generation to complete.
 - SwiftUI can outlive a callback only because callback values are copied immediately.
@@ -63,14 +72,16 @@ Training failures leave prior saved models untouched unless a new run reaches it
 - C bridge callback, cancellation, inspection, and prediction tests.
 - Debug and Release Swift builds.
 - Ad-hoc signature and property-list checks.
-- Visual inspection of initial and populated dashboards.
+- Visual and accessibility inspection of Welcome, Create, Prepare, Train, and Learn pages.
+- Mounted DMG integrity, ARM64 binary, icon, property list, signature, and Applications link.
 - Four-case XOR equivalence through native Core ML.
 
 ## Benchmark
-Only one callback is emitted per generation, keeping UI synchronization outside the per-sample and per-candidate hot loops. Existing backend performance remains the relevant compute benchmark.
+Only one callback is emitted per generation, keeping UI synchronization outside the per-sample and per-candidate hot loops. The 100,000-row generator/profiler/cleaner benchmark is recorded in `docs/benchmarks/neuroevo-data-pipeline.md`.
 
 ## Reuse Points
 - The C ABI can support AppKit, Qt, web, or Python front ends.
+- The deterministic data module can be used without the GUI.
 - Metric cards, topology view, and chart panel are independent SwiftUI components.
 - The Core ML exporter consumes the stable versioned model format.
-
+- Release scripts accept paths and signing configuration without committed credentials.
