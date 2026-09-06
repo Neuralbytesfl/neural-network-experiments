@@ -252,10 +252,12 @@ public:
             ++epoch_;
         }
         workReady_.notify_all();
-        // Join while the mutex and condition variables are still alive. Since
-        // workers_ is declared before them, relying on implicit member
-        // destruction would otherwise destroy the synchronization state first.
-        workers_.clear();
+        // Join while the mutex and condition variables are still alive. Use
+        // std::thread instead of std::jthread so the macOS 15 runner's older
+        // C++20 standard library can build the same worker-pool implementation.
+        for (auto& worker : workers_) {
+            if (worker.joinable()) worker.join();
+        }
     }
 
     GenerationWorkerPool(const GenerationWorkerPool&) = delete;
@@ -312,7 +314,7 @@ private:
         }
     }
 
-    std::vector<std::jthread> workers_;
+    std::vector<std::thread> workers_;
     std::atomic<std::size_t> cursor_{0};
     std::mutex mutex_;
     std::condition_variable workReady_;
