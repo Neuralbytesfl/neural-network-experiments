@@ -192,6 +192,47 @@ void testWorkerPoolErrorPropagation() {
     require(threw, "worker pool did not propagate an evaluation error");
 }
 
+void testTopologySchedulingDeterminism() {
+    neuroevo::Dataset dataset;
+    dataset.task = neuroevo::TaskType::Regression;
+    dataset.inputSize = 2;
+    dataset.outputSize = 1;
+    for (std::size_t row = 0; row < 128; ++row) {
+        const float x = static_cast<float>(row) / 127.0F;
+        neuroevo::Sample sample{{x, 1.0F - x}, {x * x - 0.25F}};
+        if (row < 64) dataset.train.samples.push_back(sample);
+        else if (row < 96) dataset.validation.samples.push_back(sample);
+        else dataset.test.samples.push_back(sample);
+    }
+
+    neuroevo::EvolutionOptions options;
+    options.populationSize = 24;
+    options.eliteCount = 4;
+    options.generations = 8;
+    options.patience = 8;
+    options.targetScore = 1.0;
+    options.topologyMutationRate = 1.0;
+    options.initialHidden = 32;
+    options.seed = 90210;
+    options.threads = 1;
+    std::ostringstream sequentialProgress;
+    const auto sequential = neuroevo::EvolutionEngine(options).run(dataset, sequentialProgress);
+
+    options.threads = 4;
+    std::ostringstream parallelProgress;
+    const auto parallel = neuroevo::EvolutionEngine(options).run(dataset, parallelProgress);
+    require(sequential.evaluations == parallel.evaluations,
+            "topology scheduling changed the evaluation count");
+    require(sequential.history.size() == parallel.history.size(),
+            "topology scheduling changed the generation count");
+    require(sequential.winner.id == parallel.winner.id,
+            "topology scheduling changed the selected winner");
+    require(sequential.winner.parameterCount() == parallel.winner.parameterCount(),
+            "topology scheduling changed the selected topology");
+    require(std::abs(sequential.winner.validationScore - parallel.winner.validationScore) < 1e-12,
+            "topology scheduling changed the validation score");
+}
+
 struct BridgeContext {
     NESession* session = nullptr;
     std::size_t callbacks = 0;
@@ -379,6 +420,7 @@ int main() {
         testSmallEvolution();
         testEvaluationConsistency();
         testWorkerPoolErrorPropagation();
+        testTopologySchedulingDeterminism();
         testCBridge();
         testDataGenerationAndCleaning();
         std::cout << "all tests passed\n";

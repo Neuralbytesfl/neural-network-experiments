@@ -73,7 +73,7 @@ This is a compact topology-evolving genetic algorithm, not a complete NEAT imple
 
 ## Apple M5 acceleration
 
-The hot dense layers use a hybrid path: small matrices stay in a low-overhead scalar loop, while larger matrices use Apple Accelerate BLAS. Candidate networks are evaluated in parallel across CPU cores by persistent workers, and training/validation partitions are packed once per run for batched evaluation.
+The hot dense layers use a hybrid path: small matrices stay in a low-overhead scalar loop, while larger matrices use Apple Accelerate BLAS. Candidate networks are evaluated in parallel across CPU cores by persistent workers, and training/validation partitions are packed once per run for batched evaluation. Accelerated candidates are grouped by topology, scheduled largest-first, and reuse thread-local matrix storage; small scalar datasets keep the lower-overhead direct queue.
 
 Apple does not expose Neural Engine instructions as a public C++ intrinsic set. Neural Engine scheduling happens through Core ML. Core ML's `.all` or `.cpuAndNeuralEngine` compute-unit configuration makes a compatible deployed model eligible for the Neural Engine, but the operating system decides graph placement. The rapidly changing candidate graphs are therefore evolved with Accelerate; a production deployment can convert the selected model to an ML Program and load it through Core ML. Do not describe the Accelerate path as Neural Engine execution.
 

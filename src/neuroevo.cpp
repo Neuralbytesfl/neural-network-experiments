@@ -127,6 +127,16 @@ struct PackedPartition {
     std::vector<float> targets;
 };
 
+struct AcceleratedWorkspace {
+    std::vector<float> current;
+    std::vector<float> output;
+};
+
+AcceleratedWorkspace& acceleratedWorkspace() {
+    thread_local AcceleratedWorkspace workspace;
+    return workspace;
+}
+
 PackedPartition packPartition(const Partition& partition,
                               std::size_t inputs,
                               std::size_t outputs) {
@@ -148,14 +158,16 @@ PackedPartition packPartition(const Partition& partition,
     return packed;
 }
 
-Metric evaluateBatchAccelerated(const Genome& genome, const PackedPartition& partition) {
+Metric evaluateBatchAccelerated(const Genome& genome,
+                                const PackedPartition& partition,
+                                AcceleratedWorkspace& workspace) {
     const std::size_t rows = partition.rows;
     constexpr std::size_t kMaximumBatchElements = 1U << 20U;
     const std::size_t maximumWidth = maximumLayerWidth(genome.layers);
     const std::size_t batchRows = std::min(
         rows, std::max<std::size_t>(1, kMaximumBatchElements / maximumWidth));
-    std::vector<float> current;
-    std::vector<float> output;
+    auto& current = workspace.current;
+    auto& output = workspace.output;
     Metric metric;
     std::size_t correct = 0;
     double totalLoss = 0.0;
@@ -311,6 +323,61 @@ private:
     std::size_t epoch_ = 0;
     bool stopping_ = false;
 };
+
+#if defined(NEUROEVO_USE_ACCELERATE)
+struct EvaluationBatch {
+    std::vector<std::size_t> indices;
+    std::size_t estimatedCost = 0;
+};
+
+std::vector<std::size_t> topologyKey(const Genome& genome) {
+    std::vector<std::size_t> key;
+    key.reserve(genome.layers.size() * 2 + 1);
+    key.push_back(genome.layers.size());
+    for (const auto& layer : genome.layers) {
+        key.push_back(layer.inputs);
+        key.push_back(layer.outputs);
+    }
+    return key;
+}
+
+std::size_t evaluationCost(const Genome& genome, std::size_t sampleCount) {
+    std::size_t operations = 0;
+    for (const auto& layer : genome.layers) operations += layer.inputs * layer.outputs;
+    return operations * sampleCount;
+}
+
+std::vector<EvaluationBatch> makeEvaluationBatches(const std::vector<Genome>& population,
+                                                   std::size_t workerCount,
+                                                   std::size_t sampleCount) {
+    std::map<std::vector<std::size_t>, std::vector<std::size_t>> groups;
+    for (std::size_t index = 0; index < population.size(); ++index) {
+        groups[topologyKey(population[index])].push_back(index);
+    }
+
+    std::vector<EvaluationBatch> batches;
+    for (auto& [key, indices] : groups) {
+        static_cast<void>(key);
+        const std::size_t chunkSize = std::max<std::size_t>(
+            1, (indices.size() + workerCount * 2 - 1) / (workerCount * 2));
+        for (std::size_t offset = 0; offset < indices.size(); offset += chunkSize) {
+            const std::size_t count = std::min(chunkSize, indices.size() - offset);
+            EvaluationBatch batch;
+            batch.indices.insert(
+                batch.indices.end(),
+                indices.begin() + static_cast<std::ptrdiff_t>(offset),
+                indices.begin() + static_cast<std::ptrdiff_t>(offset + count));
+            batch.estimatedCost =
+                evaluationCost(population[batch.indices.front()], sampleCount) * count;
+            batches.push_back(std::move(batch));
+        }
+    }
+    std::stable_sort(batches.begin(), batches.end(), [](const auto& left, const auto& right) {
+        return left.estimatedCost > right.estimatedCost;
+    });
+    return batches;
+}
+#endif
 
 bool sameShape(const Genome& a, const Genome& b) {
     if (a.layers.size() != b.layers.size()) return false;
@@ -630,7 +697,7 @@ Metric evaluate(const Genome& genome, const Partition& partition) {
     if (partition.samples.size() >= 32) {
         return evaluateBatchAccelerated(
             genome, packPartition(partition, genome.layers.front().inputs,
-                                  genome.layers.back().outputs));
+                                  genome.layers.back().outputs), acceleratedWorkspace());
     }
 #endif
     std::vector<float> prediction;
@@ -785,15 +852,15 @@ EvolutionResult EvolutionEngine::run(const Dataset& dataset,
 #endif
 
     for (std::size_t generation = 0; generation < options_.generations; ++generation) {
-        workerPool.run(population.size(), [&](std::size_t index) {
+        const auto evaluateGenome = [&](std::size_t index) {
             Genome& genome = population[index];
 #if defined(NEUROEVO_USE_ACCELERATE)
             if (usePackedTrain || usePackedValidation) genome.validate();
             const Metric training = usePackedTrain
-                ? evaluateBatchAccelerated(genome, packedTrain)
+                ? evaluateBatchAccelerated(genome, packedTrain, acceleratedWorkspace())
                 : evaluate(genome, dataset.train);
             const Metric validation = usePackedValidation
-                ? evaluateBatchAccelerated(genome, packedValidation)
+                ? evaluateBatchAccelerated(genome, packedValidation, acceleratedWorkspace())
                 : evaluate(genome, dataset.validation);
 #else
             const Metric training = evaluate(genome, dataset.train);
@@ -807,7 +874,23 @@ EvolutionResult EvolutionEngine::run(const Dataset& dataset,
                 ? 0.05 * training.loss : 0.0;
             genome.fitness = training.score - lossGuidance -
                 options_.complexityPenalty * static_cast<double>(genome.parameterCount());
-        });
+        };
+#if defined(NEUROEVO_USE_ACCELERATE)
+        if (usePackedTrain || usePackedValidation) {
+            const auto batches = makeEvaluationBatches(
+                population, workerCount,
+                dataset.train.samples.size() + dataset.validation.samples.size());
+            workerPool.run(batches.size(), [&](std::size_t batchIndex) {
+                for (const std::size_t index : batches[batchIndex].indices) {
+                    evaluateGenome(index);
+                }
+            });
+        } else {
+            workerPool.run(population.size(), evaluateGenome);
+        }
+#else
+        workerPool.run(population.size(), evaluateGenome);
+#endif
         result.evaluations += population.size();
         std::sort(population.begin(), population.end(),
                   [](const Genome& a, const Genome& b) { return a.fitness > b.fitness; });
