@@ -2,6 +2,7 @@
 #include "neuroevo/data_tools.hpp"
 #include "CNeuroevo.h"
 
+#include <algorithm>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -102,6 +103,71 @@ void testSmallEvolution() {
     require(result.winner.validationScore >= 0.75, "small evolution failed to learn OR");
     require(result.evaluations > 0, "no candidates evaluated");
     std::filesystem::remove(path);
+}
+
+void testEvaluationConsistency() {
+    std::mt19937_64 rng(2026);
+    std::uniform_real_distribution<float> value(-1.0F, 1.0F);
+    const auto genome = neuroevo::makeRandomGenome(
+        neuroevo::TaskType::Classification, 4, 3, {8, 8}, rng);
+    neuroevo::Partition partition;
+    for (std::size_t row = 0; row < 64; ++row) {
+        neuroevo::Sample sample;
+        sample.features.resize(4);
+        for (float& feature : sample.features) feature = value(rng);
+        sample.target.assign(3, 0.0F);
+        sample.target[row % 3] = 1.0F;
+        partition.samples.push_back(std::move(sample));
+    }
+
+    const auto actual = neuroevo::evaluate(genome, partition);
+    const neuroevo::Network network(genome);
+    std::size_t correct = 0;
+    double totalLoss = 0.0;
+    for (const auto& sample : partition.samples) {
+        const auto prediction = network.predict(sample.features);
+        const auto predicted = static_cast<std::size_t>(
+            std::max_element(prediction.begin(), prediction.end()) - prediction.begin());
+        const auto expected = static_cast<std::size_t>(
+            std::max_element(sample.target.begin(), sample.target.end()) - sample.target.begin());
+        if (predicted == expected) ++correct;
+        totalLoss -= std::log(std::max(1e-7F, prediction[expected]));
+    }
+    const double expectedScore = static_cast<double>(correct) /
+                                 static_cast<double>(partition.samples.size());
+    const double expectedLoss = totalLoss / static_cast<double>(partition.samples.size());
+    require(std::abs(actual.score - expectedScore) < 1e-12,
+            "batched evaluation changed classification score");
+    require(std::abs(actual.loss - expectedLoss) < 1e-5,
+            "batched evaluation changed classification loss");
+
+    const auto regressionGenome = neuroevo::makeRandomGenome(
+        neuroevo::TaskType::Regression, 4, 2, {8, 8}, rng);
+    neuroevo::Partition regressionPartition;
+    for (std::size_t row = 0; row < 64; ++row) {
+        neuroevo::Sample sample;
+        sample.features.resize(4);
+        sample.target.resize(2);
+        for (float& feature : sample.features) feature = value(rng);
+        for (float& target : sample.target) target = value(rng);
+        regressionPartition.samples.push_back(std::move(sample));
+    }
+    const auto regressionActual = neuroevo::evaluate(regressionGenome, regressionPartition);
+    const neuroevo::Network regressionNetwork(regressionGenome);
+    double squaredError = 0.0;
+    for (const auto& sample : regressionPartition.samples) {
+        const auto prediction = regressionNetwork.predict(sample.features);
+        for (std::size_t i = 0; i < prediction.size(); ++i) {
+            const double difference = static_cast<double>(prediction[i] - sample.target[i]);
+            squaredError += difference * difference;
+        }
+    }
+    const double regressionExpectedLoss = squaredError /
+        static_cast<double>(regressionPartition.samples.size() * 2);
+    require(std::abs(regressionActual.loss - regressionExpectedLoss) < 1e-5,
+            "batched evaluation changed regression loss");
+    require(std::abs(regressionActual.score + regressionActual.loss) < 1e-12,
+            "regression score is not negative loss");
 }
 
 struct BridgeContext {
@@ -289,6 +355,7 @@ int main() {
         testMutationValidity();
         testDatasetAndModelRoundTrip();
         testSmallEvolution();
+        testEvaluationConsistency();
         testCBridge();
         testDataGenerationAndCleaning();
         std::cout << "all tests passed\n";

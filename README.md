@@ -172,9 +172,14 @@ Normalization is baked into the first dense layer; regression target de-normaliz
 ./build/neuroevo_benchmark
 ./build-scalar/neuroevo_benchmark
 ./build/neuroevo_data_benchmark
+./build/neuroevo_training_benchmark --help
 ```
 
-The benchmark fixes its random seed and runs a `32x64x64x4` network. See `docs/benchmarks/m5-pro-neuroevo-backends.md` for captured results.
+The inference benchmark fixes its random seed and runs a `32x64x64x4` network. The
+training benchmark defaults to the maximum configured topology of four 128-unit
+hidden layers and measures both sequential and parallel partition evaluation. See
+`docs/benchmarks/m5-pro-neuroevo-backends.md` and
+`docs/benchmarks/m5-pro-maximum-training.md` for captured results.
 
 ## Limits and next extensions
 

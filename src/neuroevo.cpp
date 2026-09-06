@@ -73,6 +73,130 @@ void softmax(std::vector<float>& values) {
     for (float& value : values) value /= sum;
 }
 
+std::size_t maximumLayerWidth(const std::vector<LayerGene>& layers) {
+    std::size_t maximum = layers.front().inputs;
+    for (const auto& layer : layers) maximum = std::max(maximum, layer.outputs);
+    return maximum;
+}
+
+void predictWithWorkspace(const std::vector<LayerGene>& layers,
+                          TaskType task,
+                          const std::vector<float>& input,
+                          std::vector<float>& current,
+                          std::vector<float>& output) {
+    if (input.size() != layers.front().inputs) {
+        throw std::invalid_argument("input dimension mismatch");
+    }
+    current.assign(input.begin(), input.end());
+    for (std::size_t layerIndex = 0; layerIndex < layers.size(); ++layerIndex) {
+        const auto& layer = layers[layerIndex];
+        output.assign(layer.biases.begin(), layer.biases.end());
+#if defined(NEUROEVO_USE_ACCELERATE)
+        // BLAS call overhead dominates tiny layers, so retain a scalar fast path.
+        if (layer.inputs * layer.outputs >= 256) {
+            cblas_sgemv(CblasRowMajor, CblasNoTrans,
+                        static_cast<int>(layer.outputs), static_cast<int>(layer.inputs),
+                        1.0F, layer.weights.data(), static_cast<int>(layer.inputs),
+                        current.data(), 1, 1.0F, output.data(), 1);
+        } else
+#endif
+        {
+            for (std::size_t out = 0; out < layer.outputs; ++out) {
+                for (std::size_t in = 0; in < layer.inputs; ++in) {
+                    output[out] += layer.weights[out * layer.inputs + in] * current[in];
+                }
+            }
+        }
+        if (layerIndex + 1 < layers.size()) {
+            for (float& value : output) value = activate(value, layer.activation);
+        }
+        current.swap(output);
+    }
+    if (task == TaskType::Classification) softmax(current);
+}
+
+#if defined(NEUROEVO_USE_ACCELERATE)
+Metric evaluateBatchAccelerated(const Genome& genome, const Partition& partition) {
+    const std::size_t rows = partition.samples.size();
+    constexpr std::size_t kMaximumBatchElements = 1U << 20U;
+    const std::size_t maximumWidth = maximumLayerWidth(genome.layers);
+    const std::size_t batchRows = std::min(
+        rows, std::max<std::size_t>(1, kMaximumBatchElements / maximumWidth));
+    std::vector<float> current;
+    std::vector<float> output;
+    Metric metric;
+    std::size_t correct = 0;
+    double totalLoss = 0.0;
+    const std::size_t outputs = genome.layers.back().outputs;
+    for (std::size_t offset = 0; offset < rows; offset += batchRows) {
+        const std::size_t count = std::min(batchRows, rows - offset);
+        const std::size_t inputs = genome.layers.front().inputs;
+        current.resize(count * inputs);
+        for (std::size_t row = 0; row < count; ++row) {
+            const auto& features = partition.samples[offset + row].features;
+            if (features.size() != inputs) throw std::invalid_argument("input dimension mismatch");
+            std::copy(features.begin(), features.end(),
+                      current.begin() + static_cast<std::ptrdiff_t>(row * inputs));
+        }
+
+        for (std::size_t layerIndex = 0; layerIndex < genome.layers.size(); ++layerIndex) {
+            const auto& layer = genome.layers[layerIndex];
+            output.resize(count * layer.outputs);
+            for (std::size_t row = 0; row < count; ++row) {
+                std::copy(layer.biases.begin(), layer.biases.end(),
+                          output.begin() + static_cast<std::ptrdiff_t>(row * layer.outputs));
+            }
+            cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
+                        static_cast<int>(count), static_cast<int>(layer.outputs),
+                        static_cast<int>(layer.inputs), 1.0F,
+                        current.data(), static_cast<int>(layer.inputs),
+                        layer.weights.data(), static_cast<int>(layer.inputs),
+                        1.0F, output.data(), static_cast<int>(layer.outputs));
+            if (layerIndex + 1 < genome.layers.size()) {
+                for (float& value : output) value = activate(value, layer.activation);
+            }
+            current.swap(output);
+        }
+
+        for (std::size_t row = 0; row < count; ++row) {
+            float* prediction = current.data() + row * outputs;
+            const auto& target = partition.samples[offset + row].target;
+            if (target.size() != outputs) throw std::invalid_argument("target dimension mismatch");
+            if (genome.task == TaskType::Classification) {
+                const std::size_t predicted = static_cast<std::size_t>(
+                    std::max_element(prediction, prediction + outputs) - prediction);
+                const std::size_t expected = static_cast<std::size_t>(
+                    std::max_element(target.begin(), target.end()) - target.begin());
+                if (predicted == expected) ++correct;
+                const float maximum = *std::max_element(prediction, prediction + outputs);
+                float sum = 0.0F;
+                for (std::size_t i = 0; i < outputs; ++i) {
+                    prediction[i] = std::exp(prediction[i] - maximum);
+                    sum += prediction[i];
+                }
+                const float expectedProbability = (!(sum > 0.0F) || !std::isfinite(sum))
+                    ? 1.0F / static_cast<float>(outputs) : prediction[expected] / sum;
+                totalLoss -= std::log(std::max(kEpsilon, expectedProbability));
+            } else {
+                for (std::size_t i = 0; i < outputs; ++i) {
+                    const double difference = static_cast<double>(prediction[i] - target[i]);
+                    totalLoss += difference * difference;
+                }
+            }
+        }
+    }
+    const double count = static_cast<double>(rows);
+    if (genome.task == TaskType::Classification) {
+        metric.score = static_cast<double>(correct) / count;
+        metric.loss = totalLoss / count;
+    } else {
+        metric.loss = totalLoss / (count * static_cast<double>(outputs));
+        metric.score = -metric.loss;
+    }
+    return metric;
+}
+#endif
+
 bool sameShape(const Genome& a, const Genome& b) {
     if (a.layers.size() != b.layers.size()) return false;
     for (std::size_t i = 0; i < a.layers.size(); ++i) {
@@ -374,44 +498,32 @@ Network::Network(const Genome& genome) : task_(genome.task), layers_(genome.laye
 }
 
 std::vector<float> Network::predict(const std::vector<float>& input) const {
-    if (input.size() != layers_.front().inputs) throw std::invalid_argument("input dimension mismatch");
-    std::vector<float> current = input;
-    for (std::size_t layerIndex = 0; layerIndex < layers_.size(); ++layerIndex) {
-        const auto& layer = layers_[layerIndex];
-        std::vector<float> output = layer.biases;
-#if defined(NEUROEVO_USE_ACCELERATE)
-        // BLAS call overhead dominates tiny layers, so retain a scalar fast path.
-        if (layer.inputs * layer.outputs >= 256) {
-            cblas_sgemv(CblasRowMajor, CblasNoTrans,
-                        static_cast<int>(layer.outputs), static_cast<int>(layer.inputs),
-                        1.0F, layer.weights.data(), static_cast<int>(layer.inputs),
-                        current.data(), 1, 1.0F, output.data(), 1);
-        } else
-#endif
-        {
-            for (std::size_t out = 0; out < layer.outputs; ++out) {
-                for (std::size_t in = 0; in < layer.inputs; ++in) {
-                    output[out] += layer.weights[out * layer.inputs + in] * current[in];
-                }
-            }
-        }
-        if (layerIndex + 1 < layers_.size()) {
-            for (float& value : output) value = activate(value, layer.activation);
-        }
-        current = std::move(output);
-    }
-    if (task_ == TaskType::Classification) softmax(current);
+    std::vector<float> current;
+    std::vector<float> output;
+    const std::size_t workspaceSize = maximumLayerWidth(layers_);
+    current.reserve(workspaceSize);
+    output.reserve(workspaceSize);
+    predictWithWorkspace(layers_, task_, input, current, output);
     return current;
 }
 
 Metric evaluate(const Genome& genome, const Partition& partition) {
     if (partition.samples.empty()) throw std::invalid_argument("cannot evaluate an empty partition");
-    Network network(genome);
+    genome.validate();
+#if defined(NEUROEVO_USE_ACCELERATE)
+    // Amortize BLAS dispatch and use cache-efficient matrix-matrix kernels for datasets.
+    if (partition.samples.size() >= 32) return evaluateBatchAccelerated(genome, partition);
+#endif
+    std::vector<float> prediction;
+    std::vector<float> scratch;
+    const std::size_t workspaceSize = maximumLayerWidth(genome.layers);
+    prediction.reserve(workspaceSize);
+    scratch.reserve(workspaceSize);
     Metric metric;
     std::size_t correct = 0;
     double totalLoss = 0.0;
     for (const auto& sample : partition.samples) {
-        const auto prediction = network.predict(sample.features);
+        predictWithWorkspace(genome.layers, genome.task, sample.features, prediction, scratch);
         if (genome.task == TaskType::Classification) {
             const auto predicted = static_cast<std::size_t>(
                 std::max_element(prediction.begin(), prediction.end()) - prediction.begin());

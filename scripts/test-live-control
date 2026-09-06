@@ -27,6 +27,9 @@ fi
 ctl="$script_dir/studioctl"
 "$ctl" --compact page create >/dev/null
 "$ctl" --compact set generatedRows 240 >/dev/null
+"$ctl" --compact set threads 0 >/dev/null
+"$ctl" --compact set topologyRate 1 >/dev/null
+"$ctl" --compact set targetScore 1 >/dev/null
 "$ctl" --compact generate --pattern spiral --rows 240 --noise 0.02 --seed 777 --output "$data_path" >/dev/null
 "$ctl" --compact profile >/dev/null
 "$ctl" --compact train --data "$data_path" --output "$model_path" --task classification --population 48 --generations 30 >/dev/null
@@ -36,6 +39,6 @@ ctl="$script_dir/studioctl"
 [[ -s "$data_path" ]] || { print -u2 'error: generated CSV is missing'; exit 1; }
 [[ -s "$model_path" ]] || { print -u2 'error: trained model is missing'; exit 1; }
 status_json=$("$ctl" --compact status)
-python3 -c 'import json,sys; state=json.load(sys.stdin)["state"]; assert state["page"] == "Learn"; assert state["predictionOutput"] != "—"' <<< "$status_json"
+python3 -c 'import json,sys; state=json.load(sys.stdin)["state"]; assert state["page"] == "Learn"; assert state["predictionOutput"] != "—"; assert state["threads"] == 0; assert state["topologyRate"] == 1; assert state["targetScore"] == 1; assert state["elapsed"] >= 0' <<< "$status_json"
 print "$status_json"
 print 'Live control self-test passed.'

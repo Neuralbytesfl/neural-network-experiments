@@ -201,13 +201,23 @@ extension StudioModel {
             "targetColumns": targetColumns,
             "population": population,
             "generations": generations,
+            "elite": elite,
+            "threads": threads,
             "seed": seed,
+            "initialHidden": initialHidden,
+            "patience": patience,
+            "targetScore": targetScore,
+            "weightRate": weightRate,
+            "weightSigma": weightSigma,
+            "topologyRate": topologyRate,
+            "complexityPenalty": complexityPenalty,
             "syntheticPattern": syntheticPattern.rawValue,
             "generatedRows": generatedRows,
             "generatedNoise": generatedNoise,
             "isTraining": isTraining,
             "generation": generation,
             "progress": progress,
+            "elapsed": elapsed,
             "trainScore": trainScore,
             "validationScore": validationScore,
             "testScore": testScore ?? NSNull(),
@@ -252,7 +262,7 @@ extension StudioModel {
         return result
     }
     private func integer(_ value: Any, name: String) throws -> Int {
-        guard !(value is Bool), let number = value as? NSNumber,
+        guard let number = value as? NSNumber, !isJSONBoolean(number),
               number.doubleValue.isFinite,
               number.doubleValue.rounded(.towardZero) == number.doubleValue,
               number.doubleValue >= Double(Int.min), number.doubleValue <= Double(Int.max) else {
@@ -261,7 +271,7 @@ extension StudioModel {
         return number.intValue
     }
     private func unsigned(_ value: Any, name: String) throws -> UInt64 {
-        guard !(value is Bool), let number = value as? NSNumber,
+        guard let number = value as? NSNumber, !isJSONBoolean(number),
               number.doubleValue.isFinite, number.doubleValue >= 0,
               number.doubleValue.rounded(.towardZero) == number.doubleValue else {
             throw ControlFailure.message("\(name) must be a nonnegative integer")
@@ -269,14 +279,20 @@ extension StudioModel {
         return number.uint64Value
     }
     private func number(_ value: Any, name: String) throws -> Double {
-        guard !(value is Bool), let result = (value as? NSNumber)?.doubleValue, result.isFinite else {
+        guard let number = value as? NSNumber, !isJSONBoolean(number),
+              number.doubleValue.isFinite else {
             throw ControlFailure.message("\(name) must be a finite number")
         }
-        return result
+        return number.doubleValue
     }
     private func boolean(_ value: Any, name: String) throws -> Bool {
-        if let result = value as? Bool { return result }
-        throw ControlFailure.message("\(name) must be true or false")
+        guard let number = value as? NSNumber, isJSONBoolean(number) else {
+            throw ControlFailure.message("\(name) must be true or false")
+        }
+        return number.boolValue
+    }
+    private func isJSONBoolean(_ number: NSNumber) -> Bool {
+        CFGetTypeID(number) == CFBooleanGetTypeID()
     }
     private func writeControlJSON(_ object: [String: Any], to url: URL) throws {
         let data = try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys])

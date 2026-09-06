@@ -41,6 +41,9 @@ target_link_libraries(neuroevo_benchmark PRIVATE neuroevo_lib)
 add_executable(neuroevo_data_benchmark tools/benchmark_data.cpp)
 target_link_libraries(neuroevo_data_benchmark PRIVATE neuroevo_lib)
 
+add_executable(neuroevo_training_benchmark tools/benchmark_training.cpp)
+target_link_libraries(neuroevo_training_benchmark PRIVATE neuroevo_lib)
+
 include(CTest)
 if(BUILD_TESTING)
   add_executable(neuroevo_tests tests/test_neuroevo.cpp)
