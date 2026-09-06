@@ -1,5 +1,10 @@
 cmake_minimum_required(VERSION 3.20)
-project(neuroevo_cpp VERSION 0.1.0 LANGUAGES CXX)
+project(neuroevo_cpp
+  VERSION 0.1.0
+  DESCRIPTION "Neuralbytesfl's native C++ neuroevolution engine"
+  HOMEPAGE_URL "https://github.com/Neuralbytesfl/neural-network-experiments"
+  LANGUAGES CXX
+)
 
 option(NEUROEVO_ENABLE_ACCELERATE "Use Apple Accelerate when available" ON)
 

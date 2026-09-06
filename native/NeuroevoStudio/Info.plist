@@ -24,6 +24,8 @@
     <string>14.0</string>
     <key>NSHighResolutionCapable</key>
     <true/>
+    <key>NSHumanReadableCopyright</key>
+    <string>Copyright © 2026 Neuralbytesfl. Licensed under the MIT License.</string>
     <key>NSQuitAlwaysKeepsWindows</key>
     <false/>
     <key>NSSupportsAutomaticGraphicsSwitching</key>

@@ -1,5 +1,7 @@
 # Neuroevo C++
 
+**A Neuralbytesfl project · Copyright © 2026 Neuralbytesfl · [MIT License](LICENSE)**
+
 A dependency-light C++20 neuroevolution engine for numeric supervised-learning data. It evolves dense-network weights, biases, hidden-layer widths/depth, and activation functions, selects against a validation partition, and evaluates the winner once against a held-out test partition.
 
 This program can search for a model that generalizes from examples. It cannot guarantee an accurate solution to every problem: the data must contain a learnable relationship, the train/validation/test distributions must be representative, and the search budget and supported network family must be suitable.
@@ -190,3 +192,15 @@ hidden layers and measures both sequential and parallel partition evaluation. Se
 - Core ML export currently uses the maintained-but-feature-frozen neural-network model representation; ML Program export is a future extension
 
 The `Dataset`, `Genome`, `Network`, evaluator, and evolution engine are separate so these can be extended without rewriting the CLI.
+
+## Ownership and license
+
+Neuroevo Studio and the Neuroevo C++ engine are original Neuralbytesfl project
+code. Copyright © 2026 Neuralbytesfl.
+
+The project is open-source software licensed under the [MIT License](LICENSE).
+The license permits use, copying, modification, distribution, sublicensing, and
+commercial sale provided that the copyright and permission notice remain included.
+The software is provided without warranty, as described in the license.
+
+Project home: [github.com/Neuralbytesfl/neural-network-experiments](https://github.com/Neuralbytesfl/neural-network-experiments)

@@ -31,6 +31,9 @@ verify_app() {
   file "$app/Contents/MacOS/NeuroevoStudio" | grep -q 'arm64'
   [[ -f "$app/Contents/Resources/AppIcon.icns" ]]
   [[ -x "$app/Contents/Resources/studioctl" ]]
+  [[ -f "$app/Contents/Resources/LICENSE.txt" ]]
+  grep -Fqx 'Copyright (c) 2026 Neuralbytesfl' "$app/Contents/Resources/LICENSE.txt"
+  [[ $(/usr/libexec/PlistBuddy -c 'Print :NSHumanReadableCopyright' "$app/Contents/Info.plist") == *Neuralbytesfl* ]]
   print "Verified app: $app"
 }
 
@@ -45,6 +48,8 @@ elif [[ "$artifact" == *.dmg ]]; then
   verify_app "$mount_dir/NeuroevoStudio.app"
   [[ -L "$mount_dir/Applications" ]]
   [[ -x "$mount_dir/studioctl" ]]
+  [[ -f "$mount_dir/LICENSE.txt" ]]
+  grep -Fqx 'Copyright (c) 2026 Neuralbytesfl' "$mount_dir/LICENSE.txt"
   print "Verified DMG: $artifact"
 else
   print -u2 'error: expected a .app or .dmg path'
