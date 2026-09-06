@@ -1,0 +1,68 @@
+#!/bin/zsh
+set -euo pipefail
+
+script_dir=${0:A:h}
+project_dir=${script_dir:h}
+output_dir="$project_dir/dist"
+dry_run=0
+
+usage() {
+  print 'Build and package the native Neuroevo Studio macOS application.'
+  print ''
+  print 'Usage: scripts/build-macos-app [--dry-run] [--output DIR] [--help]'
+  print ''
+  print '  --dry-run     Print resolved inputs and planned operations without writing'
+  print '  --output DIR  Place NeuroevoStudio.app in DIR (default: ./dist)'
+  print '  --help        Show this message'
+}
+
+while (( $# > 0 )); do
+  case "$1" in
+    --dry-run)
+      dry_run=1
+      shift
+      ;;
+    --output)
+      if (( $# < 2 )); then
+        print -u2 'error: --output requires a directory'
+        exit 2
+      fi
+      output_dir=${2:A}
+      shift 2
+      ;;
+    --help|-h)
+      usage
+      exit 0
+      ;;
+    *)
+      print -u2 "error: unknown option: $1"
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+app_dir="$output_dir/NeuroevoStudio.app"
+binary_dir="$app_dir/Contents/MacOS"
+resource_dir="$app_dir/Contents/Resources"
+
+if (( dry_run )); then
+  print "project=$project_dir"
+  print "application=$app_dir"
+  print 'planned=swift release build, bundle assembly, resource copy, ad-hoc code signing'
+  exit 0
+fi
+
+cd "$project_dir"
+swift build -c release
+swift_binary_dir=$(swift build -c release --show-bin-path)
+
+mkdir -p "$binary_dir" "$resource_dir"
+cp "$swift_binary_dir/NeuroevoStudio" "$binary_dir/NeuroevoStudio"
+cp "$project_dir/native/NeuroevoStudio/Info.plist" "$app_dir/Contents/Info.plist"
+cp "$project_dir/tools/export_coreml.py" "$resource_dir/export_coreml.py"
+codesign --force --sign - "$app_dir"
+
+print "Built $app_dir"
+print "Launch with: open '$app_dir'"
+

@@ -1,4 +1,5 @@
 #include "neuroevo/neuroevo.hpp"
+#include "CNeuroevo.h"
 
 #include <cmath>
 #include <filesystem>
@@ -102,6 +103,70 @@ void testSmallEvolution() {
     std::filesystem::remove(path);
 }
 
+struct BridgeContext {
+    NESession* session = nullptr;
+    std::size_t callbacks = 0;
+};
+
+void bridgeProgress(const NEProgress* progress, void* opaque) {
+    auto* context = static_cast<BridgeContext*>(opaque);
+    ++context->callbacks;
+    require(progress != nullptr && progress->topology != nullptr, "invalid bridge progress");
+    if (progress->generation >= 2) ne_session_cancel(context->session);
+}
+
+void testCBridge() {
+    const auto dataPath = std::filesystem::temp_directory_path() / "neuroevo_bridge_data.csv";
+    const auto modelPath = std::filesystem::temp_directory_path() / "neuroevo_bridge_model.txt";
+    {
+        std::ofstream file(dataPath);
+        for (int i = 0; i < 12; ++i) file << "0,0,0\n0,1,1\n1,0,1\n1,1,0\n";
+    }
+
+    NEConfig config{};
+    ne_default_config(&config);
+    const std::string data = dataPath.string();
+    const std::string model = modelPath.string();
+    config.data_path = data.c_str();
+    config.output_path = model.c_str();
+    config.population_size = 32;
+    config.elite_count = 4;
+    config.generations = 20;
+    config.patience = 20;
+    config.target_score = 2.0;
+    config.threads = 2;
+
+    char error[512]{};
+    NEDatasetInfo info{};
+    NEConfig invalid{};
+    ne_default_config(&invalid);
+    require(ne_inspect_dataset(&invalid, &info, error, sizeof(error)) != 0 && error[0] != '\0',
+            "bridge did not report invalid configuration");
+    error[0] = '\0';
+    require(ne_inspect_dataset(&config, &info, error, sizeof(error)) == 0,
+            "bridge dataset inspection failed");
+    require(info.input_count == 2 && info.output_count == 2, "bridge dataset shape is wrong");
+
+    BridgeContext context;
+    context.session = ne_session_create();
+    require(context.session != nullptr, "bridge session creation failed");
+    NETrainResult training{};
+    const int status = ne_train(context.session, &config, bridgeProgress, &context,
+                                &training, error, sizeof(error));
+    require(status == 0, "bridge training failed");
+    require(training.cancelled == 1 && context.callbacks >= 3, "bridge cancellation failed");
+    ne_session_destroy(context.session);
+
+    const float features[] = {0.0F, 1.0F};
+    NEPrediction prediction{};
+    require(ne_predict(model.c_str(), features, 2, &prediction, error, sizeof(error)) == 0,
+            "bridge prediction failed");
+    require(prediction.count == 2 && prediction.is_classification == 1,
+            "bridge prediction metadata is wrong");
+    std::filesystem::remove(dataPath);
+    std::filesystem::remove(modelPath);
+}
+
 } // namespace
 
 int main() {
@@ -110,6 +175,7 @@ int main() {
         testMutationValidity();
         testDatasetAndModelRoundTrip();
         testSmallEvolution();
+        testCBridge();
         std::cout << "all tests passed\n";
         return 0;
     } catch (const std::exception& error) {

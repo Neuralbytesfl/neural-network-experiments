@@ -516,7 +516,9 @@ EvolutionEngine::EvolutionEngine(EvolutionOptions options) : options_(std::move(
     if (options_.threads == 0) options_.threads = std::max(1U, std::thread::hardware_concurrency());
 }
 
-EvolutionResult EvolutionEngine::run(const Dataset& dataset, std::ostream& progress) {
+EvolutionResult EvolutionEngine::run(const Dataset& dataset,
+                                     std::ostream& progress,
+                                     const ProgressCallback& callback) {
     const auto started = std::chrono::steady_clock::now();
     std::mt19937_64 rng(options_.seed);
     std::vector<Genome> population;
@@ -593,6 +595,8 @@ EvolutionResult EvolutionEngine::run(const Dataset& dataset, std::ostream& progr
                  << " validation_best=" << stats.bestValidationScore
                  << " mean_fitness=" << stats.meanFitness
                  << " parameters=" << stats.bestParameters << '\n';
+
+        if (callback && !callback(stats, *validationBest)) break;
 
         if (bestSeen >= options_.targetScore || staleGenerations >= options_.patience ||
             generation + 1 == options_.generations) break;

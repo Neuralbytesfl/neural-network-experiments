@@ -2,4 +2,7 @@
 /build-scalar/
 *.neuroevo
 .DS_Store
-
+.backups/
+/.build/
+/dist/
+/.venv-coreml/

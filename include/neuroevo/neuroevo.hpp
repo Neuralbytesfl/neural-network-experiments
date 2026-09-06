@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <iosfwd>
 #include <random>
 #include <string>
@@ -129,8 +130,12 @@ struct EvolutionResult {
 
 class EvolutionEngine {
 public:
+    using ProgressCallback = std::function<bool(const GenerationStats&, const Genome&)>;
+
     explicit EvolutionEngine(EvolutionOptions options);
-    EvolutionResult run(const Dataset& dataset, std::ostream& progress);
+    EvolutionResult run(const Dataset& dataset,
+                        std::ostream& progress,
+                        const ProgressCallback& callback = {});
 
 private:
     EvolutionOptions options_;

@@ -83,6 +83,58 @@ Apple references:
 - [Accelerate and BNNS](https://developer.apple.com/documentation/Accelerate/bnns-library)
 - [Core ML Tools ML Program format](https://apple.github.io/coremltools/docs-guides/source/target-conversion-formats.html)
 
+## Native macOS application
+
+Neuroevo Studio is a native SwiftUI and Swift Charts application backed by the same C++ engine. It includes:
+
+- CSV and output-model pickers
+- Classification/regression controls
+- Live training and validation chart
+- Dataset split and shape summary
+- Current winning topology
+- Generation, validation, test, parameter, evaluation, and elapsed-time metrics
+- Cooperative stop that saves the best model found so far
+- Run logs and raw-row prediction
+- Core ML export and CPU-plus-Neural-Engine-allowed inference
+
+Build and package the signed arm64 application:
+
+```bash
+./scripts/build-macos-app --dry-run
+./scripts/build-macos-app
+open dist/NeuroevoStudio.app
+```
+
+The app can be preloaded for demos or automation:
+
+```bash
+open -n dist/NeuroevoStudio.app --args \
+  --data "$PWD/examples/xor.csv" \
+  --output "$PWD/build/gui-xor.neuroevo"
+```
+
+Full Xcode is not required for this build path; Swift 6 and macOS Command Line Tools are sufficient.
+
+## Core ML export
+
+The exporter uses an isolated optional Python environment because Apple distributes Core ML Tools as a Python package:
+
+```bash
+python3 -m venv .venv-coreml
+source .venv-coreml/bin/activate
+python -m pip install coremltools numpy
+
+python tools/export_coreml.py \
+  --model winner.neuroevo \
+  --output winner.mlmodel
+
+swiftc -parse-as-library tools/verify_coreml.swift \
+  -framework CoreML -o build/verify_coreml
+./build/verify_coreml winner.mlmodel 0,1
+```
+
+Normalization is baked into the first dense layer; regression target de-normalization is baked into the final layer. The native loader requests `.cpuAndNeuralEngine`. This makes compatible operations eligible for the Neural Engine but does not prove that every operation ran there—the Core ML runtime owns placement.
+
 ## Benchmark
 
 ```bash
@@ -98,7 +150,6 @@ The benchmark fixes its random seed and runs a `32x64x64x4` network. See `docs/b
 - No categorical/text/image preprocessing
 - No gradient fine-tuning after evolution
 - No NEAT speciation or innovation-number crossover
-- No direct export of the saved text artifact to Core ML yet
+- Core ML export currently uses the maintained-but-feature-frozen neural-network model representation; ML Program export is a future extension
 
 The `Dataset`, `Genome`, `Network`, evaluator, and evolution engine are separate so these can be extended without rewriting the CLI.
-
